@@ -57,15 +57,10 @@ func CreateOrAppend(path, schema string) (*sql.DB, error) {
 	if info.Size() == 0 {
 		return openWithSchema(path, schema)
 	}
-	db, err := OpenWritable(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := CheckHeader(db); err != nil {
-		_ = db.Close()
+	if err := Check(path); err != nil {
 		return nil, fmt.Errorf("cannot append to %s: %w", path, err)
 	}
-	return db, nil
+	return OpenWritable(path)
 }
 
 func preparePath(path string) error {
@@ -141,7 +136,7 @@ func fileDSNWithQuery(path, rawQuery string) (string, error) {
 }
 
 func Check(path string) error {
-	db, err := OpenWritable(path)
+	db, err := OpenReadOnly(path)
 	if err != nil {
 		return err
 	}
@@ -149,24 +144,14 @@ func Check(path string) error {
 	for _, check := range []func(*sql.DB) error{
 		checkIntegrity,
 		checkMetadata,
+		checkExactSchema,
 		checkRequiredTables,
+		checkWorkloadContracts,
 		checkSpecHashes,
 		checkRunRowCount,
 		checkSpecKindRows,
 		checkForeignKeys,
 		checkArtifactHashes,
-	} {
-		if err := check(db); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func CheckHeader(db *sql.DB) error {
-	for _, check := range []func(*sql.DB) error{
-		checkMetadata,
-		checkRunRowCount,
 	} {
 		if err := check(db); err != nil {
 			return err
@@ -250,8 +235,69 @@ func checkMetadata(db *sql.DB) error {
 	return nil
 }
 
+type schemaObject struct {
+	kind string
+	name string
+	sql  string
+}
+
+func checkExactSchema(db *sql.DB) error {
+	expectedDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return err
+	}
+	expectedDB.SetMaxOpenConns(1)
+	defer expectedDB.Close()
+	if _, err := expectedDB.Exec(Schema); err != nil {
+		return fmt.Errorf("create reference schema: %w", err)
+	}
+	expected, err := readSchemaObjects(expectedDB)
+	if err != nil {
+		return err
+	}
+	actual, err := readSchemaObjects(db)
+	if err != nil {
+		return err
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("schema object count = %d, want %d", len(actual), len(expected))
+	}
+	for i := range expected {
+		if actual[i] != expected[i] {
+			return fmt.Errorf("schema object %q does not match the current format", expected[i].name)
+		}
+	}
+	var userVersion int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil {
+		return err
+	}
+	if userVersion != 1 {
+		return fmt.Errorf("sqlite user_version = %d, want 1", userVersion)
+	}
+	return nil
+}
+
+func readSchemaObjects(db *sql.DB) ([]schemaObject, error) {
+	rows, err := db.Query(`SELECT type, name, sql FROM sqlite_master
+		WHERE name NOT LIKE 'sqlite_%' AND type IN ('table', 'index')
+		ORDER BY type, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var objects []schemaObject
+	for rows.Next() {
+		var object schemaObject
+		if err := rows.Scan(&object.kind, &object.name, &object.sql); err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, rows.Err()
+}
+
 func checkRequiredTables(db *sql.DB) error {
-	required := []string{"metadata", "run", "specs", "engines", "profiles", "workloads", "phases", "measurements", "metric_stats", "requests", "request_stream_events", "telemetry_series", "telemetry_samples", "events", "commands", "artifacts", "reports"}
+	required := []string{"metadata", "run", "specs", "engines", "profiles", "workloads", "datasets", "source_records", "canonical_requests", "phases", "measurements", "metric_stats", "requests", "request_stream_events", "telemetry_series", "telemetry_samples", "events", "commands", "artifacts", "reports"}
 	present := map[string]bool{}
 	rows, err := db.Query("SELECT name FROM sqlite_master WHERE type = 'table'")
 	if err != nil {
@@ -269,6 +315,59 @@ func checkRequiredTables(db *sql.DB) error {
 		if !present[table] {
 			return fmt.Errorf("missing required table %s", table)
 		}
+	}
+	return nil
+}
+
+func checkWorkloadContracts(db *sql.DB) error {
+	var invalid int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM workloads WHERE role NOT IN ('benchmark', 'diagnostic')`).Scan(&invalid); err != nil {
+		return err
+	}
+	if invalid != 0 {
+		return fmt.Errorf("workloads with invalid role = %d", invalid)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM workloads
+		WHERE metadata_json IS NULL
+		   OR COALESCE(json_extract(metadata_json, '$.context.target'), 0) <= 0
+		   OR COALESCE(json_extract(metadata_json, '$.context.semantics'), '') NOT IN ('active', 'capacity')`).Scan(&invalid); err != nil {
+		return err
+	}
+	if invalid != 0 {
+		return fmt.Errorf("workloads with invalid context semantics = %d", invalid)
+	}
+	var undersampled int
+	if err := db.QueryRow(`SELECT COUNT(*)
+		FROM workloads AS workload
+		JOIN json_each(workload.concurrency_json) AS point
+		WHERE workload.role = 'benchmark'
+		  AND workload.samples < max(8, 2 * CAST(point.value AS INTEGER))`).Scan(&undersampled); err != nil {
+		return err
+	}
+	if undersampled != 0 {
+		return fmt.Errorf("benchmark workload points below the minimum sample count = %d", undersampled)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*)
+		FROM measurements AS measurement
+		JOIN workloads AS workload ON workload.id = measurement.workload_id
+		WHERE workload.role = 'benchmark'
+		  AND measurement.samples_requested < max(8, 2 * measurement.concurrency)`).Scan(&undersampled); err != nil {
+		return err
+	}
+	if undersampled != 0 {
+		return fmt.Errorf("benchmark measurements below the minimum sample count = %d", undersampled)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*)
+		FROM measurements AS measurement
+		JOIN workloads AS workload ON workload.id = measurement.workload_id
+		WHERE NOT EXISTS (
+			SELECT 1 FROM json_each(workload.concurrency_json) AS point
+			WHERE CAST(point.value AS INTEGER) = measurement.concurrency
+		)`).Scan(&invalid); err != nil {
+		return err
+	}
+	if invalid != 0 {
+		return fmt.Errorf("measurements outside their declared concurrency ladder = %d", invalid)
 	}
 	return nil
 }

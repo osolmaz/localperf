@@ -94,11 +94,11 @@ func TestRuntimeIntentReachesSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Runner.VLLMCommand != "/opt/runtimes/vllm/bin/vllm" {
-		t.Fatalf("vllm command = %q, want intent runtime path", spec.Runner.VLLMCommand)
+	if len(spec.Engines) != 1 || spec.Engines[0].Command != "/opt/runtimes/vllm/bin/vllm" {
+		t.Fatalf("engines = %+v, want intent runtime path", spec.Engines)
 	}
-	if spec.Runner.VLLMBenchCommand != "/opt/runtimes/vllm/bin/vllm" {
-		t.Fatalf("vllm bench command = %q, want the same runtime as serve", spec.Runner.VLLMBenchCommand)
+	if spec.Engines[0].BenchCommand != "/opt/runtimes/vllm/bin/vllm" {
+		t.Fatalf("bench command = %q, want the same runtime as serve", spec.Engines[0].BenchCommand)
 	}
 	for _, profile := range spec.Profiles {
 		if profile.GPUMemoryUtilization != 0.4 {

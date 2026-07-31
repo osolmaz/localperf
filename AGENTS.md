@@ -21,11 +21,16 @@ small dry benchmark case and validate the SQLite artifact:
 
 ```sh
 rm -rf /tmp/localperf-onecase-dry /tmp/localperf-onecase-dry.sqlite
+go run ./cmd/localperf sweep plan \
+  --model test/model \
+  --contexts 4k \
+  --concurrency 1 \
+  --out /tmp/localperf-onecase-spec.json
 go run ./cmd/localperf bench run \
   --dry-run \
-  --spec examples/diffusiongemma-vllm-standard/spec.json \
+  --spec /tmp/localperf-onecase-spec.json \
   --profile 4k-reference \
-  --workload claim-repro-1k-out1024 \
+  --workload max-throughput-reference \
   --concurrency 1 \
   --run-dir /tmp/localperf-onecase-dry
 go run ./cmd/localperf artifact check /tmp/localperf-onecase-dry.sqlite

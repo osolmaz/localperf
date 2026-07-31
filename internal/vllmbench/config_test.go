@@ -56,17 +56,80 @@ func TestBuildPlanAndBenchCommand(t *testing.T) {
 	}
 }
 
-func TestLoadGeneratorAliasesNormalize(t *testing.T) {
-	for _, alias := range []string{"vllm-bench", "vllmbench", "vllm_bench"} {
+func TestLoadGeneratorAliasesAreRejected(t *testing.T) {
+	for _, alias := range []string{"vllm-bench", "vllmbench", "localperf-http", "http", "openai-http"} {
 		spec := testSpec()
 		spec.Workloads[0].LoadGenerator = alias
 		ApplyDefaults(&spec)
-		if got := spec.Workloads[0].LoadGenerator; got != LoadGeneratorVLLMBench {
-			t.Fatalf("load_generator alias %q normalized to %q, want %q", alias, got, LoadGeneratorVLLMBench)
+		if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "unsupported load_generator") {
+			t.Fatalf("ValidateSpec with alias %q = %v, want unsupported load_generator", alias, err)
 		}
-		if err := ValidateSpec(spec); err != nil {
-			t.Fatalf("ValidateSpec with alias %q: %v", alias, err)
+	}
+}
+
+func TestLoadSpecRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spec.json")
+	writeFile(t, path, `{"version":"1","unknown":true}`)
+	_, err := LoadSpec(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("LoadSpec = %v, want unknown field rejection", err)
+	}
+}
+
+func TestValidateSpecRequiresCurrentVersionRoleAndContextSemantics(t *testing.T) {
+	for name, mutate := range map[string]func(*Spec){
+		"version":           func(spec *Spec) { spec.Version = "" },
+		"role":              func(spec *Spec) { spec.Workloads[0].Role = "" },
+		"context semantics": func(spec *Spec) { spec.Workloads[0].ContextSemantics = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := testSpec()
+			mutate(&spec)
+			if err := ValidateSpec(spec); err == nil {
+				t.Fatalf("ValidateSpec accepted missing %s", name)
+			}
+		})
+	}
+}
+
+func TestValidateSpecEnforcesBenchmarkSampleFloor(t *testing.T) {
+	for _, tc := range []struct {
+		concurrency int
+		numPrompts  int
+	}{
+		{concurrency: 1, numPrompts: 7},
+		{concurrency: 8, numPrompts: 15},
+	} {
+		spec := testSpec()
+		spec.Workloads[0].MaxConcurrency = []int{tc.concurrency}
+		spec.Workloads[0].NumPrompts = tc.numPrompts
+		spec.Workloads[0].PromptsPerUser = 0
+		err := ValidateSpec(spec)
+		if err == nil || !strings.Contains(err.Error(), "need at least") {
+			t.Fatalf("ValidateSpec c%d n%d = %v, want sample floor rejection", tc.concurrency, tc.numPrompts, err)
 		}
+	}
+
+	spec := testSpec()
+	spec.Workloads[0].Role = WorkloadRoleDiagnostic
+	spec.Workloads[0].MaxConcurrency = []int{8}
+	spec.Workloads[0].NumPrompts = 1
+	spec.Workloads[0].PromptsPerUser = 0
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatalf("ValidateSpec diagnostic probe: %v", err)
+	}
+}
+
+func TestExecuteRejectsInvalidSpecBeforeCreatingRunFiles(t *testing.T) {
+	spec := testSpec()
+	spec.Workloads[0].NumPrompts = 1
+	spec.Workloads[0].PromptsPerUser = 0
+	runDir := filepath.Join(t.TempDir(), "must-not-exist")
+	if _, err := Execute(context.Background(), spec, RunOptions{DryRun: true, RunDir: runDir}); err == nil || !strings.Contains(err.Error(), "need at least") {
+		t.Fatalf("Execute = %v, want benchmark sample rejection", err)
+	}
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("invalid execution created run directory: %v", err)
 	}
 }
 
@@ -216,10 +279,10 @@ func TestBenchCommandSupportsStandardDatasetKnobs(t *testing.T) {
 	}
 }
 
-func TestLoadSpecSupportsEngineNeutralShape(t *testing.T) {
+func TestLoadSpecSupportsCanonicalEngineNeutralShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "spec.json")
 	writeFile(t, path, `{
-  "version": "localperf.bench/v1",
+  "version": "1",
   "name": "engine-neutral",
   "model": "example/model",
   "safety": {"min_mem_available_gib": 1},
@@ -232,31 +295,28 @@ func TestLoadSpecSupportsEngineNeutralShape(t *testing.T) {
       "engine": "vllm",
       "managed": true,
       "port": 8104,
-      "serve": {
-        "max_model_len": 4096,
-        "max_num_seqs": 8,
-        "max_num_batched_tokens": 4096,
-        "gpu_memory_utilization": 0.25
-      },
+      "max_model_len": 4096,
+      "max_num_seqs": 8,
+      "max_num_batched_tokens": 4096,
+      "gpu_memory_utilization": 0.25,
       "engine_args": ["--disable-log-requests"]
     }
   ],
   "workloads": [
     {
       "name": "decode",
+      "role": "benchmark",
       "profiles": ["4k"],
       "context_target": 4096,
       "context_semantics": "capacity",
-      "traffic": {
-        "backend": "openai-chat",
-        "dataset_name": "random",
-        "random_input_len": 128,
-        "random_output_len": 16,
-        "request_rate": "inf"
-      },
-      "samples": 3,
+      "backend": "openai-chat",
+      "dataset_name": "random",
+      "random_input_len": 128,
+      "random_output_len": 16,
+      "request_rate": "inf",
+      "num_prompts": 8,
       "repeats": 2,
-      "concurrency": [1, 2]
+      "max_concurrency": [1, 2]
     }
   ]
 }`)
@@ -264,57 +324,13 @@ func TestLoadSpecSupportsEngineNeutralShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Profiles[0].MaxModelLen != 4096 || spec.Profiles[0].MaxNumSeqs != 8 {
-		t.Fatalf("serve fields were not lifted into profile: %+v", spec.Profiles[0])
-	}
-	if spec.Workloads[0].NumPrompts != 3 || spec.Workloads[0].Repeats != 2 {
-		t.Fatalf("samples/repeats not normalized: %+v", spec.Workloads[0])
-	}
 	if got := len(BuildPlan(spec, "runs/example")); got != 4 {
 		t.Fatalf("plan length = %d, want 4", got)
 	}
-	command := ServeCommand(spec, spec.Profiles[0])
-	got := ShellQuote(command.Args)
+	got := ShellQuote(ServeCommand(spec, spec.Profiles[0]).Args)
 	for _, want := range []string{"vllm-custom serve", "--max-model-len 4096", "--disable-log-requests"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("serve command %q missing %q", got, want)
-		}
-	}
-}
-
-func TestApplyDefaultsOverlaysNestedTraffic(t *testing.T) {
-	spec := testSpec()
-	spec.Workloads = []Workload{{
-		Name:     "mixed-traffic",
-		Profiles: []string{"8k"},
-		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
-			SaveDetailed: boolPointer(true),
-			Metadata:     []string{"suite=localperf"},
-			Goodput:      []string{"ttft:5000"},
-			ExtraArgs:    []string{"--request-id-prefix", "mixed"},
-		},
-		Traffic: BenchmarkTrafficConfig{
-			Backend:         "openai-chat",
-			DatasetName:     "random",
-			RandomInputLen:  128,
-			RandomOutputLen: 16,
-			RequestRate:     "inf",
-		},
-		Samples:     2,
-		Concurrency: []int{1},
-	}}
-	ApplyDefaults(&spec)
-	workload := spec.Workloads[0]
-	if !boolValue(workload.SaveDetailed) || fmt.Sprint(workload.Metadata) != "[suite=localperf]" || fmt.Sprint(workload.Goodput) != "[ttft:5000]" {
-		t.Fatalf("top-level traffic flags were not preserved: %+v", workload.BenchmarkTrafficConfig)
-	}
-	if workload.RandomInputLen != 128 || workload.RandomOutputLen != 16 || workload.NumPrompts != 2 || fmt.Sprint(workload.MaxConcurrency) != "[1]" {
-		t.Fatalf("nested traffic aliases were not applied: %+v", workload)
-	}
-	command := ShellQuote(BenchCommand(spec, BuildPlan(spec, "runs/example")[0]).Args)
-	for _, want := range []string{"--save-detailed", "--metadata suite=localperf", "--goodput ttft:5000", "--request-id-prefix mixed"} {
-		if !strings.Contains(command, want) {
-			t.Fatalf("command %q missing preserved arg %q", command, want)
 		}
 	}
 }
@@ -354,22 +370,6 @@ func TestApplyDefaultsNormalizesWorkloadPhase(t *testing.T) {
 	want := []string{"decode-phase", "prefill", "decode", "mixed"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("workload phases = %#v, want %#v", got, want)
-	}
-}
-
-func TestApplyDefaultsCopiesSamplesToStructuredDatasetSampleCount(t *testing.T) {
-	spec := testSpec()
-	workload := testShareGPTWorkload("sharegpt.json", []string{"8k"})
-	workload.Samples = 1
-	workload.NumPrompts = 0
-	workload.Dataset.SampleCount = 0
-	spec.Workloads = []Workload{workload}
-
-	ApplyDefaults(&spec)
-
-	got := spec.Workloads[0]
-	if got.NumPrompts != 1 || got.Dataset.SampleCount != 1 {
-		t.Fatalf("structured samples defaults = num_prompts %d sample_count %d, want 1 and 1", got.NumPrompts, got.Dataset.SampleCount)
 	}
 }
 
@@ -660,7 +660,7 @@ func TestPromptsPerUserWorksForStructuredDatasets(t *testing.T) {
 	workload := testCustomJSONLWorkload("structured-ppu", "requests.jsonl", []string{"8k"})
 	workload.Dataset.SampleCount = 0
 	workload.PromptsPerUser = 2
-	workload.Load.MaxConcurrency = []int{1, 4}
+	workload.MaxConcurrency = []int{1, 4}
 	spec.Workloads = []Workload{workload}
 	ApplyDefaults(&spec)
 	if err := ValidateSpec(spec); err != nil {
@@ -675,7 +675,7 @@ func TestStructuredScaledWorkloadSurvivesMaterialization(t *testing.T) {
 	workload := testCustomJSONLWorkload("scaled-materialized", "requests.jsonl", []string{"8k"})
 	workload.Dataset.SampleCount = 0
 	workload.PromptsPerUser = 2
-	workload.Load.MaxConcurrency = []int{1, 4}
+	workload.MaxConcurrency = []int{1, 4}
 	applyWorkloadDefault(&workload)
 	applyMaterializedDatasetToWorkload(&workload, 8, "rendered.jsonl")
 	if workload.NumPrompts != 0 || workload.PromptsPerUser != 2 {
@@ -785,6 +785,7 @@ func TestApplyFilterDropsWorkloadsWithoutMatchingConcurrency(t *testing.T) {
 	spec := testSpec()
 	spec.Workloads = append(spec.Workloads, Workload{
 		Name:             "claim-repro",
+		Role:             WorkloadRoleBenchmark,
 		Profiles:         []string{"8k"},
 		ContextTarget:    8192,
 		ContextSemantics: ContextSemanticsCapacity,
@@ -794,7 +795,7 @@ func TestApplyFilterDropsWorkloadsWithoutMatchingConcurrency(t *testing.T) {
 			RandomInputLen:  1000,
 			RandomOutputLen: 1024,
 		},
-		NumPrompts:     20,
+		NumPrompts:     40,
 		MaxConcurrency: []int{20},
 	})
 	ApplyDefaults(&spec)
@@ -832,7 +833,7 @@ func TestParseVLLMBenchResult(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "result.json")
 	writeFile(t, path, `{"backend":"openai-chat","model_id":"nvidia/diffusiongemma-26B-A4B-it-NVFP4","num_prompts":4,"max_concurrency":1,"duration":13.1517,"completed":4,"failed":0,"output_throughput":311.441,"total_token_throughput":619.612,"mean_ttft_ms":2597.32}`)
-	rows, err := ParseResultFile(path)
+	rows, err := parseResultFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -845,26 +846,6 @@ func TestParseVLLMBenchResult(t *testing.T) {
 	}
 	if row.PerUserOutputTokSec != 311.441 {
 		t.Fatalf("per-user throughput = %v, want 311.441", row.PerUserOutputTokSec)
-	}
-}
-
-func TestParseCustomJSONLResult(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "result.jsonl")
-	writeFile(t, path, `{"profile":"grid-l8192-s16-gpu035","max_model_len":8192,"server_max_num_seqs":16,"concurrency":8,"requests":8,"max_tokens":512,"wall_seconds":38.117,"ok":8,"failed":0,"completion_tokens":4096,"total_tokens":4400,"aggregate_completion_tokens_per_second":107.459,"aggregate_total_tokens_per_second":115.434}`)
-	rows, err := ParseResultFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(rows))
-	}
-	row := rows[0]
-	if row.Context != 8192 || row.Concurrency != 8 || row.DisplayOutputLen() != 512 {
-		t.Fatalf("unexpected row: %+v", row)
-	}
-	if row.PerUserOutputTokSec < 13.4 || row.PerUserOutputTokSec > 13.5 {
-		t.Fatalf("per-user throughput = %v, want about 13.4", row.PerUserOutputTokSec)
 	}
 }
 
@@ -908,32 +889,35 @@ func TestExecuteDryRunStoresOriginalSpecAndPlannedCommandStatus(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "spec.json")
 	writeFile(t, specPath, `{
-  "version": "localperf.bench/v1",
+  "version": "1",
   "name": "original-spec-artifact",
   "model": "example/model",
   "env": {"HF_TOKEN": "hf_secret", "CUTE_DSL_ARCH": "sm_121a"},
+  "engines": [{"name": "vllm", "type": "vllm-managed", "command": "vllm"}],
   "safety": {"min_mem_available_gib": 1},
   "profiles": [
     {
       "name": "4k",
+      "engine": "vllm",
       "managed": true,
       "port": 8104,
-      "serve": {"max_model_len": 4096, "max_num_seqs": 4, "max_num_batched_tokens": 4096}
+      "max_model_len": 4096,
+      "max_num_seqs": 4,
+      "max_num_batched_tokens": 4096
     }
   ],
   "workloads": [
     {
       "name": "decode",
+      "role": "benchmark",
       "profiles": ["4k"],
       "context_target": 4096,
       "context_semantics": "capacity",
-      "traffic": {
-        "dataset_name": "random",
-        "random_input_len": 128,
-        "random_output_len": 16
-      },
-      "samples": 3,
-      "concurrency": [1]
+      "dataset_name": "random",
+      "random_input_len": 128,
+      "random_output_len": 16,
+      "num_prompts": 8,
+      "max_concurrency": [1]
     }
   ]
 }`)
@@ -976,8 +960,8 @@ func TestExecuteDryRunStoresOriginalSpecAndPlannedCommandStatus(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(specs["original"], `"samples": 3`) || !strings.Contains(specs["original"], `"traffic"`) {
-		t.Fatalf("original spec did not preserve submitted aliases:\n%s", specs["original"])
+	if !strings.Contains(specs["original"], `"num_prompts": 8`) || !strings.Contains(specs["original"], `"role": "benchmark"`) {
+		t.Fatalf("original spec did not preserve canonical workload fields:\n%s", specs["original"])
 	}
 	if !strings.Contains(specs["original"], `"max_num_batched_tokens": 4096`) {
 		t.Fatalf("original spec redacted or dropped token-count field:\n%s", specs["original"])
@@ -988,11 +972,8 @@ func TestExecuteDryRunStoresOriginalSpecAndPlannedCommandStatus(t *testing.T) {
 	if !strings.Contains(specs["original"], `"CUTE_DSL_ARCH": "sm_121a"`) {
 		t.Fatalf("original spec redacted non-secret env value:\n%s", specs["original"])
 	}
-	if strings.Contains(specs["original"], `"num_prompts"`) {
-		t.Fatalf("original spec unexpectedly contains normalized num_prompts:\n%s", specs["original"])
-	}
-	if !strings.Contains(specs["normalized"], `"num_prompts": 3`) {
-		t.Fatalf("normalized spec did not contain normalized num_prompts:\n%s", specs["normalized"])
+	if !strings.Contains(specs["normalized"], `"num_prompts": 8`) {
+		t.Fatalf("normalized spec did not preserve num_prompts:\n%s", specs["normalized"])
 	}
 	var status string
 	var exitCode sql.NullInt64
@@ -1016,12 +997,13 @@ func TestExecuteDryRunStoresOriginalSpecAndPlannedCommandStatus(t *testing.T) {
 	if workloadPhase != "decode" {
 		t.Fatalf("workload phase = %q, want decode", workloadPhase)
 	}
-	var datasetJSON, requestJSON, loadJSON sql.NullString
-	if err := db.QueryRow("SELECT dataset_json, request_json, load_json FROM workloads WHERE name = 'decode'").Scan(&datasetJSON, &requestJSON, &loadJSON); err != nil {
+	var role string
+	var datasetJSON, requestJSON sql.NullString
+	if err := db.QueryRow("SELECT role, dataset_json, request_json FROM workloads WHERE name = 'decode'").Scan(&role, &datasetJSON, &requestJSON); err != nil {
 		t.Fatal(err)
 	}
-	if datasetJSON.Valid || requestJSON.Valid || loadJSON.Valid {
-		t.Fatalf("legacy structured workload JSON columns = dataset %v request %v load %v, want all NULL", datasetJSON, requestJSON, loadJSON)
+	if role != WorkloadRoleBenchmark || datasetJSON.Valid || requestJSON.Valid {
+		t.Fatalf("workload role=%q dataset=%v request=%v, want benchmark and no structured data", role, datasetJSON, requestJSON)
 	}
 }
 
@@ -1073,8 +1055,7 @@ func TestExecuteWithFakeVLLMEndToEnd(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -1091,15 +1072,11 @@ func TestExecuteWithFakeVLLMEndToEnd(t *testing.T) {
 	if summary.CompletedRuns != 1 || summary.FailedRuns != 0 {
 		t.Fatalf("summary = %+v, want one completed run", summary)
 	}
-	report, err := BuildReport(summary.RunDir)
-	if err != nil {
-		t.Fatal(err)
+	if len(summary.Rows) != 1 {
+		t.Fatalf("summary rows = %d, want 1", len(summary.Rows))
 	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("report rows = %d, want 1", len(report.Rows))
-	}
-	if report.Rows[0].OutputTokensPerSec != 20 {
-		t.Fatalf("output throughput = %v, want 20", report.Rows[0].OutputTokensPerSec)
+	if summary.Rows[0].OutputTokensPerSec != 20 {
+		t.Fatalf("output throughput = %v, want 20", summary.Rows[0].OutputTokensPerSec)
 	}
 	assertSQLiteArtifact(t, summary.ArtifactPath)
 }
@@ -1110,8 +1087,7 @@ func TestExecuteRepeatsUseDistinctLogsAndMeasurements(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -1221,7 +1197,7 @@ func TestPrepareDatasetsMaterializesShareGPTWorkload(t *testing.T) {
 	}
 }
 
-func TestHTTPCommandUsesPreparedCanonicalDataset(t *testing.T) {
+func TestInternalHTTPPlanUsesPreparedCanonicalDataset(t *testing.T) {
 	dir := t.TempDir()
 	datasetPath := writeShareGPTFixture(t, dir)
 	spec := testSpec()
@@ -1240,7 +1216,7 @@ func TestHTTPCommandUsesPreparedCanonicalDataset(t *testing.T) {
 	workload := spec.Workloads[0]
 	command := ShellQuote(LoadCommand(spec, BuildPlan(spec, runDir)[0]).Args)
 	for _, want := range []string{
-		"localperf bench http-load",
+		"internal:http-load",
 		"--dataset-name custom",
 		"--dataset-path " + workload.Dataset.Prepared.CanonicalPath,
 		"--min-mem-available-gib 40",
@@ -1252,12 +1228,15 @@ func TestHTTPCommandUsesPreparedCanonicalDataset(t *testing.T) {
 			t.Fatalf("command %q missing %q", command, want)
 		}
 	}
+	if strings.Contains(command, "localperf bench http-load") {
+		t.Fatalf("internal HTTP plan exposed a runnable raw-load command: %q", command)
+	}
 	if strings.Contains(command, workload.Dataset.Prepared.VLLMCustomPath) {
-		t.Fatalf("localperf_http command should use canonical dataset path, got %q", command)
+		t.Fatalf("internal HTTP plan should use canonical dataset path, got %q", command)
 	}
 }
 
-func TestHTTPCommandUsesDirectDatasetPath(t *testing.T) {
+func TestInternalHTTPPlanUsesDirectDatasetPath(t *testing.T) {
 	spec := testSpec()
 	spec.Workloads = []Workload{testRandomWorkload("http-custom", []string{"8k"}, 0, 8, 1, []int{1})}
 	spec.Workloads[0].LoadGenerator = LoadGeneratorHTTP
@@ -1277,7 +1256,7 @@ func TestHTTPCommandUsesDirectDatasetPath(t *testing.T) {
 func TestPrepareDatasetsAllowsPerRowCustomOutputTokens(t *testing.T) {
 	dir := t.TempDir()
 	datasetPath := filepath.Join(dir, "custom.jsonl")
-	writeFile(t, datasetPath, `{"id":"one","prompt":"hello","output_tokens":3}
+	writeFile(t, datasetPath, `{"id":"one","prompt":"hello","max_output_tokens":3}
 `)
 	spec := testSpec()
 	spec.Workloads = []Workload{testCustomJSONLWorkload("row-output", datasetPath, []string{"8k"})}
@@ -1300,13 +1279,12 @@ func TestPrepareDatasetsAllowsPerRowCustomOutputTokens(t *testing.T) {
 	}
 }
 
-func TestPrepareDatasetsKeepsExplicitTrafficRequestRate(t *testing.T) {
+func TestPrepareDatasetsKeepsRequestRate(t *testing.T) {
 	dir := t.TempDir()
 	datasetPath := writeShareGPTFixture(t, dir)
 	spec := testSpec()
 	spec.Workloads = []Workload{testShareGPTWorkload(datasetPath, []string{"8k"})}
 	spec.Workloads[0].BenchmarkTrafficConfig.RequestRate = "5"
-	spec.Workloads[0].Load.RequestRate = "inf"
 	ApplyDefaults(&spec)
 	if err := ValidateSpec(spec); err != nil {
 		t.Fatal(err)
@@ -1402,7 +1380,7 @@ func TestSQLiteArtifactIgnoresStaleDatasetFiles(t *testing.T) {
 	spec.Profiles = spec.Profiles[:1]
 	spec.Profiles[0].Managed = false
 	spec.Profiles[0].Port = freeTestPort()
-	spec.Workloads = []Workload{testRandomWorkload("legacy", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
+	spec.Workloads = []Workload{testRandomWorkload("random", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
 
 	summary, err := Execute(context.Background(), spec, RunOptions{DryRun: true, RunDir: runDir})
 	if err != nil {
@@ -1418,7 +1396,7 @@ func TestSQLiteArtifactIgnoresStaleDatasetFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if datasetArtifacts != 0 {
-		t.Fatalf("dataset artifacts = %d, want 0 for legacy run with stale files", datasetArtifacts)
+		t.Fatalf("dataset artifacts = %d, want 0 for random workload with stale files", datasetArtifacts)
 	}
 }
 
@@ -1448,8 +1426,7 @@ func TestExecuteWithShareGPTDatasetStoresCanonicalArtifactRows(t *testing.T) {
 	spec.OutputDir = dir
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -1464,7 +1441,8 @@ func TestExecuteWithShareGPTDatasetStoresCanonicalArtifactRows(t *testing.T) {
 
 	summary, err := Execute(context.Background(), spec, RunOptions{})
 	if err != nil {
-		t.Fatal(err)
+		events, _ := os.ReadFile(summary.EventsPath)
+		t.Fatalf("Execute: %v (run dir %s)\n%s", err, summary.RunDir, events)
 	}
 	if summary.CompletedRuns != 1 || summary.FailedRuns != 0 {
 		t.Fatalf("summary = %+v, want one completed run", summary)
@@ -1553,8 +1531,7 @@ func TestExecuteStructuredSyntheticDatasetEnrichesSummaryRows(t *testing.T) {
 	spec.OutputDir = dir
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -1565,6 +1542,7 @@ func TestExecuteStructuredSyntheticDatasetEnrichesSummaryRows(t *testing.T) {
 	spec.Profiles[0].EnableSleepMode = false
 	spec.Workloads = []Workload{{
 		Name:             "structured-synthetic",
+		Role:             WorkloadRoleDiagnostic,
 		Profiles:         []string{spec.Profiles[0].Name},
 		ContextTarget:    8192,
 		ContextSemantics: ContextSemanticsCapacity,
@@ -1574,14 +1552,17 @@ func TestExecuteStructuredSyntheticDatasetEnrichesSummaryRows(t *testing.T) {
 			InputTokens:  8192,
 			OutputTokens: 16,
 		},
-		Request: RequestSpec{Mode: "chat", MaxOutputTokens: 16},
-		Load:    LoadConfig{MaxConcurrency: []int{1}, RequestRate: "inf"},
+		Request:                RequestSpec{Mode: "chat", MaxOutputTokens: 16},
+		LoadGenerator:          LoadGeneratorVLLMBench,
+		MaxConcurrency:         []int{1},
+		BenchmarkTrafficConfig: BenchmarkTrafficConfig{RequestRate: "inf"},
 	}}
 	ApplyDefaults(&spec)
 
 	summary, err := Execute(context.Background(), spec, RunOptions{})
 	if err != nil {
-		t.Fatal(err)
+		events, _ := os.ReadFile(summary.EventsPath)
+		t.Fatalf("Execute: %v (run dir %s)\n%s", err, summary.RunDir, events)
 	}
 	if len(summary.Rows) != 1 {
 		t.Fatalf("summary rows = %d, want 1", len(summary.Rows))
@@ -1693,8 +1674,7 @@ func TestExecuteFailsWhenBenchmarkReportsRequestFailures(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Env["FAKE_BENCH_FAILED"] = "1"
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
@@ -1719,13 +1699,6 @@ func TestExecuteFailsWhenBenchmarkReportsRequestFailures(t *testing.T) {
 	}
 	if !strings.Contains(string(events), "failed request") {
 		t.Fatalf("events did not record failed request:\n%s", events)
-	}
-	report, err := BuildReport(summary.RunDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 || report.Rows[0].Failed != 1 {
-		t.Fatalf("report rows = %+v, want failed request row", report.Rows)
 	}
 }
 
@@ -1856,13 +1829,6 @@ func TestExecuteHTTPFailedSamplesRemainReportable(t *testing.T) {
 	if summary.FailedRuns != 1 {
 		t.Fatalf("summary = %+v, want one failed run", summary)
 	}
-	report, err := BuildReport(summary.RunDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 || report.Rows[0].Failed != 1 {
-		t.Fatalf("report rows = %+v, want failed request row", report.Rows)
-	}
 	events, err := os.ReadFile(summary.EventsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1923,7 +1889,7 @@ func TestInsertMeasurementPreservesUnknownTokenNulls(t *testing.T) {
 	}
 }
 
-func TestInsertMeasurementDetailsReadsFallbackResultFile(t *testing.T) {
+func TestInsertMeasurementDetailsReadsPlannedResultFile(t *testing.T) {
 	runDir := t.TempDir()
 	resultFile := filepath.Join("results", "failed.json")
 	writeFile(t, filepath.Join(runDir, resultFile), `{
@@ -1959,7 +1925,7 @@ func TestInsertMeasurementDetailsReadsFallbackResultFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if requestRows != 1 {
-		t.Fatalf("request rows = %d, want fallback result sample imported", requestRows)
+		t.Fatalf("request rows = %d, want planned result sample imported", requestRows)
 	}
 }
 
@@ -1985,20 +1951,6 @@ func TestRowsByMeasurementRequiresResultWrittenForErroredEvents(t *testing.T) {
 	row := rows[measurementKey("profile", "workload", 1, 0)]
 	if row.Completed != 1 || row.Failed != 1 {
 		t.Fatalf("row completed/failed = %d/%d, want partial result imported", row.Completed, row.Failed)
-	}
-}
-
-func TestBuildReportIncludesWrittenPartialErroredResult(t *testing.T) {
-	runDir := t.TempDir()
-	resultFile := filepath.Join("results", "partial.json")
-	writeFile(t, filepath.Join(runDir, resultFile), `{"completed":1,"failed":1}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"profile","workload":"workload","concurrency":1,"result_file":"results/partial.json","error":"timeout","details":{"result_written":true}}`+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 || report.Rows[0].Completed != 1 || report.Rows[0].Failed != 1 {
-		t.Fatalf("report rows = %+v, want partial errored result row", report.Rows)
 	}
 }
 
@@ -2035,10 +1987,10 @@ func TestMeasurementRawArtifactIDLinksFailedResultArtifact(t *testing.T) {
 		ResultFile:  resultFile,
 		Error:       "external benchmark failed",
 	}}
-	if got := measurementRawArtifactID(ReportRow{}, events, planned, map[string]int64{resultFile: 42}); got != 42 {
+	if got := measurementRawArtifactID(events, planned, map[string]int64{resultFile: 42}); got != 42 {
 		t.Fatalf("raw artifact id = %d, want failed result artifact linked", got)
 	}
-	if got := measurementResultFile(ReportRow{}, events, planned); got != "" {
+	if got := measurementResultFile(events, planned); got != "" {
 		t.Fatalf("measurement result file = %q, want no sample import for unmarked failed result", got)
 	}
 }
@@ -2070,7 +2022,7 @@ func seedMeasurementParents(t *testing.T, tx *sql.Tx) {
 		`INSERT INTO run (id, name, status, created_at) VALUES ('run', 'run', 'completed', '2026-01-01T00:00:00Z')`,
 		`INSERT INTO engines (id, run_id, name, type, managed) VALUES ('run/engine', 'run', 'engine', 'test', 0)`,
 		`INSERT INTO profiles (id, run_id, engine_id, name, model, managed) VALUES ('run/profile', 'run', 'run/engine', 'profile', 'model', 0)`,
-		`INSERT INTO workloads (id, run_id, name, traffic_json, concurrency_json, samples) VALUES ('run/workload', 'run', 'workload', '{}', '[1]', 1)`,
+		`INSERT INTO workloads (id, run_id, name, role, traffic_json, concurrency_json, samples) VALUES ('run/workload', 'run', 'workload', 'diagnostic', '{}', '[1]', 1)`,
 	} {
 		if _, err := tx.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -2264,8 +2216,7 @@ func TestExecuteFailedRepeatsAttachToCorrectMeasurements(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Env["FAKE_BENCH_FAILED"] = "1"
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
@@ -2316,37 +2267,6 @@ func TestExecuteFailedRepeatsAttachToCorrectMeasurements(t *testing.T) {
 	}
 }
 
-func TestExecuteDerivesPerUserAfterPlannedRunEnrichment(t *testing.T) {
-	spec := testSpec()
-	spec.Name = "fake-vllm-derived-per-user"
-	spec.OutputDir = t.TempDir()
-	appendTimestamp := false
-	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
-	spec.Env["FAKE_BENCH_OMIT_CONCURRENCY"] = "1"
-	spec.Safety.MinMemAvailableGiB = 0.1
-	spec.Safety.StartupTimeoutSec = 10
-	spec.Safety.WorkloadTimeoutSec = 10
-	spec.Safety.HTTPTimeoutSec = 2
-	spec.Warmup.Enabled = false
-	spec.Profiles = spec.Profiles[:1]
-	spec.Profiles[0].Port = freeTestPort()
-	spec.Profiles[0].EnableSleepMode = false
-	spec.Workloads = []Workload{testRandomWorkload("fake-random", []string{spec.Profiles[0].Name}, 128, 16, 2, []int{2})}
-	ApplyDefaults(&spec)
-	summary, err := Execute(context.Background(), spec, RunOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(summary.Rows) != 1 {
-		t.Fatalf("summary rows = %d, want 1", len(summary.Rows))
-	}
-	if got := summary.Rows[0].PerUserOutputTokSec; got != 10 {
-		t.Fatalf("per-user throughput = %v, want 10", got)
-	}
-}
-
 func TestExecuteStopsManagedProfileAfterWorkloadMemoryFloorAbort(t *testing.T) {
 	startFile := filepath.Join(t.TempDir(), "bench.started")
 	oldCheckMemoryFloor := checkMemoryFloor
@@ -2367,8 +2287,7 @@ func TestExecuteStopsManagedProfileAfterWorkloadMemoryFloorAbort(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Env["FAKE_BENCH_STARTED_FILE"] = startFile
 	spec.Env["FAKE_BENCH_SLEEP_MS"] = "500"
 	spec.Safety.MinMemAvailableGiB = 40
@@ -2410,8 +2329,7 @@ func TestExecuteFailsWhenWarmupReportsRequestFailures(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Env["FAKE_BENCH_FAILED"] = "1"
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
@@ -2459,8 +2377,7 @@ func TestExecuteWarmsPrebootedProfileAfterWake(t *testing.T) {
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Runner.PrebootProfiles = true
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -2490,8 +2407,7 @@ func TestSleepProfileWaitsForSleepingState(t *testing.T) {
 	spec := testSpec()
 	spec.Name = "fake-vllm-delayed-sleep"
 	spec.OutputDir = t.TempDir()
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.PollIntervalMillis = 20
 	spec.Safety.StartupTimeoutSec = 5
@@ -2528,8 +2444,7 @@ func TestWakeProfileWaitsForAwakeState(t *testing.T) {
 	spec := testSpec()
 	spec.Name = "fake-vllm-delayed-wake"
 	spec.OutputDir = t.TempDir()
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.PollIntervalMillis = 20
 	spec.Safety.StartupTimeoutSec = 5
@@ -2572,8 +2487,7 @@ func TestExecuteStopsPrebootedProfileAfterWakeFailure(t *testing.T) {
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Runner.PrebootProfiles = true
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -2613,8 +2527,7 @@ func TestExecuteStopsManagedProfileOnInterrupt(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Env["FAKE_BENCH_STARTED_FILE"] = startFile
 	spec.Env["FAKE_BENCH_SLEEP_MS"] = "5000"
 	spec.Safety.MinMemAvailableGiB = 0.1
@@ -2668,8 +2581,7 @@ func TestExecuteContextCancelAfterPartialProgressIsFatal(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Env["FAKE_BENCH_STARTED_DIR"] = startedDir
 	spec.Env["FAKE_BENCH_SLEEP_MS"] = "5000"
 	spec.Env["FAKE_BENCH_SLEEP_CONCURRENCY"] = "2"
@@ -2761,8 +2673,7 @@ func TestExecuteHonorsStopManagedOnExitFalse(t *testing.T) {
 	stopManaged := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Runner.StopManagedOnExit = &stopManaged
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -2797,8 +2708,7 @@ func TestExecuteFailsWhenSleepFails(t *testing.T) {
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -2842,8 +2752,7 @@ func TestExecuteFinalizesArtifactsWhenPrebootFails(t *testing.T) {
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Runner.PrebootProfiles = true
-	spec.Runner.VLLMCommand = fakeVLLMScript(t)
-	spec.Runner.VLLMBenchCommand = spec.Runner.VLLMCommand
+	configureFakeVLLM(t, &spec)
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Safety.StartupTimeoutSec = 10
 	spec.Safety.WorkloadTimeoutSec = 10
@@ -2878,215 +2787,6 @@ func TestExecuteFinalizesArtifactsWhenPrebootFails(t *testing.T) {
 	}
 }
 
-func TestBuildReportEnrichesFromSpec(t *testing.T) {
-	spec := testSpec()
-	runDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(runDir, "results"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ApplyDefaults(&spec)
-	if err := writeJSONFile(filepath.Join(runDir, "spec.normalized.json"), spec); err != nil {
-		t.Fatal(err)
-	}
-	resultPath := filepath.Join(runDir, "results", "8k__prefill-8k__c4.json")
-	writeFile(t, resultPath, `{"max_concurrency":4,"completed":8,"failed":0,"output_throughput":200,"total_token_throughput":250}`)
-	events := `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"8k","workload":"prefill-8k","concurrency":4,"result_file":"` + resultPath + `"}`
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), events+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	row := report.Rows[0]
-	if row.Context != 8192 || row.RandomInputLen != 8192 || row.RandomOutputLen != 16 || row.DatasetName != "random" || row.Phase != "prefill" {
-		t.Fatalf("row was not enriched from spec: %+v", row)
-	}
-}
-
-func TestBuildReportEnrichesGenericLengthsFromSpec(t *testing.T) {
-	spec := testSpec()
-	spec.Workloads = []Workload{{
-		Name:     "sonnet-prefill",
-		Profiles: []string{"8k"},
-		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
-			Backend:         "openai-chat",
-			DatasetName:     "sonnet",
-			SonnetInputLen:  4096,
-			SonnetOutputLen: 32,
-			RequestRate:     "inf",
-		},
-		NumPrompts:     4,
-		MaxConcurrency: []int{2},
-	}}
-	ApplyDefaults(&spec)
-	runDir := t.TempDir()
-	if err := writeJSONFile(filepath.Join(runDir, "spec.normalized.json"), spec); err != nil {
-		t.Fatal(err)
-	}
-	resultPath := filepath.Join(runDir, "results", "8k__sonnet-prefill__c2.json")
-	writeFile(t, resultPath, `{"completed":4,"failed":0,"output_throughput":80}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"8k","workload":"sonnet-prefill","concurrency":2,"result_file":"results/8k__sonnet-prefill__c2.json"}`+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	row := report.Rows[0]
-	if row.InputLen != 4096 || row.OutputLen != 32 || row.DisplayInputLen() != 4096 || row.DisplayOutputLen() != 32 || row.Phase != "prefill" {
-		t.Fatalf("row was not enriched with generic lengths: %+v", row)
-	}
-}
-
-func TestBuildReportEnrichesStructuredOutputLenFromSpec(t *testing.T) {
-	spec := testSpec()
-	spec.Workloads = []Workload{{
-		Name:     "sharegpt-structured",
-		Phase:    "decode",
-		Profiles: []string{"8k"},
-		Dataset:  DatasetSpec{Type: "sharegpt", SampleCount: 1},
-		Request:  RequestSpec{Mode: "chat", MaxOutputTokens: 512},
-		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
-			Backend:         "openai-chat",
-			DatasetName:     "custom",
-			CustomOutputLen: intPointer(-1),
-			RequestRate:     "inf",
-		},
-		NumPrompts:     1,
-		MaxConcurrency: []int{1},
-	}}
-	ApplyDefaults(&spec)
-	runDir := t.TempDir()
-	if err := writeJSONFile(filepath.Join(runDir, "spec.normalized.json"), spec); err != nil {
-		t.Fatal(err)
-	}
-	resultPath := filepath.Join(runDir, "results", "8k__sharegpt-structured__c1.json")
-	writeFile(t, resultPath, `{"completed":1,"failed":0,"output_throughput":10}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"8k","workload":"sharegpt-structured","concurrency":1,"result_file":"results/8k__sharegpt-structured__c1.json"}`+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	row := report.Rows[0]
-	if row.OutputLen != 512 || row.DisplayOutputLen() != 512 {
-		t.Fatalf("row output length was not enriched from structured request: %+v", row)
-	}
-}
-
-func TestBuildReportEnrichesStructuredInputLenFromSpec(t *testing.T) {
-	spec := testSpec()
-	spec.Workloads = []Workload{{
-		Name:     "structured-synthetic",
-		Profiles: []string{"8k"},
-		Dataset: DatasetSpec{
-			Type:         "synthetic",
-			SampleCount:  1,
-			InputTokens:  8192,
-			OutputTokens: 16,
-		},
-		Request: RequestSpec{Mode: "chat", MaxOutputTokens: 16},
-		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
-			Backend:         "openai-chat",
-			DatasetName:     "custom",
-			CustomOutputLen: intPointer(-1),
-			RequestRate:     "inf",
-		},
-		NumPrompts:     1,
-		MaxConcurrency: []int{1},
-	}}
-	ApplyDefaults(&spec)
-	if spec.Workloads[0].Phase != "prefill" {
-		t.Fatalf("normalized structured phase = %q, want prefill", spec.Workloads[0].Phase)
-	}
-	runDir := t.TempDir()
-	if err := writeJSONFile(filepath.Join(runDir, "spec.normalized.json"), spec); err != nil {
-		t.Fatal(err)
-	}
-	resultPath := filepath.Join(runDir, "results", "8k__structured-synthetic__c1.json")
-	writeFile(t, resultPath, `{"completed":1,"failed":0,"output_throughput":10}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"8k","workload":"structured-synthetic","concurrency":1,"result_file":"results/8k__structured-synthetic__c1.json"}`+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	row := report.Rows[0]
-	if row.InputLen != 8192 || row.DisplayInputLen() != 8192 || row.Phase != "prefill" {
-		t.Fatalf("row input length/phase was not enriched from structured dataset: %+v", row)
-	}
-}
-
-func TestBuildReportDerivesPerUserAfterEventEnrichment(t *testing.T) {
-	runDir := t.TempDir()
-	resultPath := filepath.Join(runDir, "results", "p__w__c4.json")
-	writeFile(t, resultPath, `{"completed":4,"failed":0,"output_throughput":100}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"p","workload":"w","concurrency":4,"result_file":"results/p__w__c4.json"}`+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	if got := report.Rows[0].PerUserOutputTokSec; got != 25 {
-		t.Fatalf("per-user throughput = %v, want 25", got)
-	}
-}
-
-func TestBuildReportResolvesCWDRelativeResultPathsWithAbsoluteRunDir(t *testing.T) {
-	root := t.TempDir()
-	runDir := filepath.Join(root, "runs", "foo")
-	resultPath := filepath.Join(runDir, "results", "p__w__c1.json")
-	if err := os.MkdirAll(filepath.Dir(resultPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, resultPath, `{"max_concurrency":1,"completed":1,"output_throughput":10}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"p","workload":"w","concurrency":1,"result_file":"runs/foo/results/p__w__c1.json"}`+"\n")
-	t.Chdir(t.TempDir())
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	if report.Rows[0].ResultFile != resultPath {
-		t.Fatalf("result path = %q, want %q", report.Rows[0].ResultFile, resultPath)
-	}
-}
-
-func TestBuildReportPrefersRunRelativeResultPaths(t *testing.T) {
-	root := t.TempDir()
-	t.Chdir(root)
-	runDir := filepath.Join("runs", "foo")
-	resultPath := filepath.Join(runDir, "results", "p__w__c1.json")
-	cwdResultPath := filepath.Join("results", "p__w__c1.json")
-	writeFile(t, resultPath, `{"max_concurrency":1,"completed":1,"output_throughput":10}`)
-	writeFile(t, cwdResultPath, `{"max_concurrency":1,"completed":1,"output_throughput":999}`)
-	writeFile(t, filepath.Join(runDir, "events.jsonl"), `{"timestamp":"2026-06-26T00:00:00Z","type":"workload_finish","profile":"p","workload":"w","concurrency":1,"result_file":"results/p__w__c1.json"}`+"\n")
-	report, err := BuildReport(runDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(report.Rows) != 1 {
-		t.Fatalf("rows = %d, want 1", len(report.Rows))
-	}
-	if report.Rows[0].OutputTokensPerSec != 10 {
-		t.Fatalf("output throughput = %v, want run-relative result", report.Rows[0].OutputTokensPerSec)
-	}
-	if report.Rows[0].ResultFile != resultPath {
-		t.Fatalf("result path = %q, want %q", report.Rows[0].ResultFile, resultPath)
-	}
-}
-
 func testSpec() Spec {
 	temp := 0.0
 	oneAwake := true
@@ -3098,9 +2798,13 @@ func testSpec() Spec {
 		Env: map[string]string{
 			"VLLM_USE_V2_MODEL_RUNNER": "1",
 		},
+		Engines: []EngineConfig{{
+			Name:         "vllm",
+			Type:         "vllm-managed",
+			Command:      "vllm",
+			BenchCommand: "vllm",
+		}},
 		Runner: RunnerConfig{
-			VLLMCommand:       "vllm",
-			VLLMBenchCommand:  "vllm",
 			OneAwakeProfile:   &oneAwake,
 			StopManagedOnExit: &stopManaged,
 		},
@@ -3110,6 +2814,7 @@ func testSpec() Spec {
 		Profiles: []Profile{
 			{
 				Name:                 "8k",
+				Engine:               "vllm",
 				Host:                 "127.0.0.1",
 				Port:                 8108,
 				Managed:              true,
@@ -3126,6 +2831,7 @@ func testSpec() Spec {
 		Workloads: []Workload{
 			{
 				Name:             "prefill-8k",
+				Role:             WorkloadRoleBenchmark,
 				Profiles:         []string{"8k"},
 				ContextTarget:    8192,
 				ContextSemantics: ContextSemanticsCapacity,
@@ -3136,7 +2842,7 @@ func testSpec() Spec {
 					RandomOutputLen: 16,
 					RequestRate:     "inf",
 				},
-				NumPrompts:     8,
+				PromptsPerUser: 2,
 				MaxConcurrency: []int{4, 8},
 				Temperature:    &temp,
 			},
@@ -3233,6 +2939,7 @@ func testServerHostPort(t *testing.T, server *httptest.Server) (string, int) {
 func testRandomWorkload(name string, profiles []string, inputLen, outputLen, numPrompts int, concurrencies []int) Workload {
 	return Workload{
 		Name:             name,
+		Role:             WorkloadRoleDiagnostic,
 		Profiles:         profiles,
 		ContextTarget:    8192,
 		ContextSemantics: ContextSemanticsCapacity,
@@ -3253,6 +2960,7 @@ func testShareGPTWorkload(path string, profiles []string) Workload {
 	temp := 0.0
 	return Workload{
 		Name:             "sharegpt-chat-smoke",
+		Role:             WorkloadRoleDiagnostic,
 		Phase:            "decode",
 		Profiles:         profiles,
 		ContextTarget:    8192,
@@ -3271,9 +2979,10 @@ func testShareGPTWorkload(path string, profiles []string) Workload {
 			MaxOutputTokens: 512,
 			Temperature:     &temp,
 		},
-		Load: LoadConfig{
-			MaxConcurrency: []int{1},
-			RequestRate:    "inf",
+		LoadGenerator:  LoadGeneratorVLLMBench,
+		MaxConcurrency: []int{1},
+		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
+			RequestRate: "inf",
 		},
 	}
 }
@@ -3281,6 +2990,7 @@ func testShareGPTWorkload(path string, profiles []string) Workload {
 func testCustomJSONLWorkload(name, path string, profiles []string) Workload {
 	return Workload{
 		Name:             name,
+		Role:             WorkloadRoleDiagnostic,
 		Phase:            "decode",
 		Profiles:         profiles,
 		ContextTarget:    8192,
@@ -3295,9 +3005,10 @@ func testCustomJSONLWorkload(name, path string, profiles []string) Workload {
 			Mode:            "chat",
 			MaxOutputTokens: 1,
 		},
-		Load: LoadConfig{
-			MaxConcurrency: []int{1},
-			RequestRate:    "inf",
+		LoadGenerator:  LoadGeneratorHTTP,
+		MaxConcurrency: []int{1},
+		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
+			RequestRate: "inf",
 		},
 	}
 }
@@ -3305,6 +3016,7 @@ func testCustomJSONLWorkload(name, path string, profiles []string) Workload {
 func testRawPayloadWorkload(name, path string, profiles []string) Workload {
 	return Workload{
 		Name:             name,
+		Role:             WorkloadRoleDiagnostic,
 		Phase:            "decode",
 		Profiles:         profiles,
 		ContextTarget:    8192,
@@ -3318,9 +3030,10 @@ func testRawPayloadWorkload(name, path string, profiles []string) Workload {
 		Request: RequestSpec{
 			Mode: "raw_payload",
 		},
-		Load: LoadConfig{
-			MaxConcurrency: []int{1},
-			RequestRate:    "inf",
+		LoadGenerator:  LoadGeneratorHTTP,
+		MaxConcurrency: []int{1},
+		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
+			RequestRate: "inf",
 		},
 	}
 }
@@ -3352,6 +3065,15 @@ func writeFile(t *testing.T, path, content string) {
 
 func testIntPointer(value int) *int {
 	return &value
+}
+
+func configureFakeVLLM(t *testing.T, spec *Spec) {
+	t.Helper()
+	command := fakeVLLMScript(t)
+	for i := range spec.Engines {
+		spec.Engines[i].Command = command
+		spec.Engines[i].BenchCommand = command
+	}
 }
 
 func fakeVLLMScript(t *testing.T) string {
@@ -3514,12 +3236,13 @@ func runFakeBench(args []string) {
 		"completed":              numPrompts - failed,
 		"failed":                 failed,
 		"duration":               1.0,
+		"total_input_tokens":     numPrompts * 128,
+		"total_output_tokens":    numPrompts * 16,
+		"total_tokens":           numPrompts * 144,
 		"output_throughput":      float64(concurrency * 10),
 		"total_token_throughput": float64(concurrency * 12),
 	}
-	if os.Getenv("FAKE_BENCH_OMIT_CONCURRENCY") != "1" {
-		row["max_concurrency"] = concurrency
-	}
+	row["max_concurrency"] = concurrency
 	data, _ := json.Marshal(row)
 	if err := os.WriteFile(resultPath, append(data, '\n'), 0o644); err != nil {
 		os.Exit(1)
@@ -3646,7 +3369,6 @@ func TestDatasetSampleCountDefaults(t *testing.T) {
 func TestPrefixCachingResolvedFromArgs(t *testing.T) {
 	spec := testSpec()
 	spec.Profiles[0].EnablePrefixCaching = nil
-	spec.Profiles[0].Serve.EnablePrefixCaching = nil
 	spec.Profiles[0].Args = append(spec.Profiles[0].Args, "--no-enable-prefix-caching")
 	ApplyDefaults(&spec)
 	if got := spec.Profiles[0].EnablePrefixCaching; got == nil || *got {
@@ -3655,7 +3377,6 @@ func TestPrefixCachingResolvedFromArgs(t *testing.T) {
 
 	spec = testSpec()
 	spec.Profiles[0].EnablePrefixCaching = nil
-	spec.Profiles[0].Serve.EnablePrefixCaching = nil
 	spec.Profiles[0].Args = append(spec.Profiles[0].Args, "--no-enable-prefix-caching")
 	spec.Profiles[0].EngineArgs = append(spec.Profiles[0].EngineArgs, "--enable-prefix-caching=true")
 	ApplyDefaults(&spec)
@@ -3665,7 +3386,6 @@ func TestPrefixCachingResolvedFromArgs(t *testing.T) {
 
 	spec = testSpec()
 	spec.Profiles[0].EnablePrefixCaching = nil
-	spec.Profiles[0].Serve.EnablePrefixCaching = nil
 	ApplyDefaults(&spec)
 	if got := spec.Profiles[0].EnablePrefixCaching; got != nil {
 		t.Fatalf("prefix caching = %v, want unknown without any signal", got)

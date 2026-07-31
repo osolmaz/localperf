@@ -418,7 +418,7 @@ func (session *runSession) writeArtifactSnapshot() {
 	}
 	snapshot := session.summary
 	snapshot.InProgress = true
-	if err := WriteSQLiteArtifact(session.runDir, snapshot.ArtifactPath, session.spec, snapshot, session.plan, session.opts.OriginalSpecPath); err != nil {
+	if err := writeSQLiteArtifact(session.runDir, snapshot.ArtifactPath, session.spec, snapshot, session.opts.OriginalSpecPath); err != nil {
 		session.events.Write(Event{Timestamp: time.Now().UTC(), Type: "artifact_snapshot_failed", Error: err.Error()})
 	}
 }
@@ -539,7 +539,7 @@ func writeFinalArtifact(runDir string, summary *RunSummary, spec Spec, originalS
 	if summary.ArtifactPath == "" {
 		return nil
 	}
-	return WriteSQLiteArtifact(runDir, summary.ArtifactPath, spec, *summary, BuildPlan(spec, runDir), originalSpecPath)
+	return writeSQLiteArtifact(runDir, summary.ArtifactPath, spec, *summary, originalSpecPath)
 }
 
 func finalRunError(summary RunSummary, runErr error) error {
@@ -873,7 +873,7 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 		events.Write(event)
 		return err
 	}
-	if err := validateWarmupResult(event.ResultFile); err != nil {
+	if err := validateWarmupResult(event.ResultFile, spec.Warmup.NumPrompts, spec.Warmup.MaxConcurrency); err != nil {
 		event.Error = err.Error()
 		events.Write(event)
 		return err
@@ -882,12 +882,12 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 	return nil
 }
 
-func validateWarmupResult(path string) error {
-	return validateParsedResult(path, "warmup")
+func validateWarmupResult(path string, expectedRequests, expectedConcurrency int) error {
+	return validateParsedResult(path, "warmup", expectedRequests, expectedConcurrency)
 }
 
-func validateParsedResult(path, label string) error {
-	rows, err := ParseResultFile(path)
+func validateParsedResult(path, label string, expectedRequests, expectedConcurrency int) error {
+	rows, err := parseResultFile(path)
 	if err != nil {
 		return err
 	}
@@ -897,7 +897,7 @@ func validateParsedResult(path, label string) error {
 	if failed := failedRequestCount(rows); failed > 0 {
 		return fmt.Errorf("%s result reported %d failed request(s)", label, failed)
 	}
-	return nil
+	return validateResultPoint(rows[0], label, expectedRequests, expectedConcurrency)
 }
 
 func executeBench(ctx context.Context, spec Spec, planned PlannedRun, runDir string, events *eventWriter) (*ReportRow, error) {
@@ -956,7 +956,7 @@ func executeBench(ctx context.Context, spec Spec, planned PlannedRun, runDir str
 
 // parsedPlannedRow parses and enriches the planned run's result file.
 func parsedPlannedRow(planned PlannedRun) (*ReportRow, int, error) {
-	rows, err := ParseResultFile(planned.ResultFile)
+	rows, err := parseResultFile(planned.ResultFile)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -964,8 +964,14 @@ func parsedPlannedRow(planned PlannedRun) (*ReportRow, int, error) {
 		return nil, 0, errors.New("benchmark result file did not contain a parseable row")
 	}
 	row := rows[0]
+	failed := failedRequestCount(rows)
+	if failed == 0 {
+		if err := validateResultPoint(row, "workload", resolvedNumPrompts(planned.Workload, planned.Concurrency), planned.Concurrency); err != nil {
+			return nil, 0, err
+		}
+	}
 	enrichPlannedRow(&row, planned)
-	return &row, failedRequestCount(rows), nil
+	return &row, failed, nil
 }
 
 func enrichPlannedRow(row *ReportRow, planned PlannedRun) {
@@ -990,15 +996,12 @@ func enrichPlannedRow(row *ReportRow, planned PlannedRun) {
 // random workloads) the measured token shape matches the current spec, so an
 // edited spec re-runs instead of silently inheriting stale results.
 func resumableRow(planned PlannedRun) (*ReportRow, bool) {
-	rows, err := ParseResultFile(planned.ResultFile)
+	rows, err := parseResultFile(planned.ResultFile)
 	if err != nil || len(rows) == 0 || failedRequestCount(rows) > 0 {
 		return nil, false
 	}
 	raw := rows[0]
-	if raw.Completed < planned.Workload.NumPrompts {
-		return nil, false
-	}
-	if raw.Concurrency != 0 && raw.Concurrency != planned.Concurrency {
+	if validateResultPoint(raw, "workload", resolvedNumPrompts(planned.Workload, planned.Concurrency), planned.Concurrency) != nil {
 		return nil, false
 	}
 	if !resultMatchesShape(raw, planned.Workload) {
@@ -1006,6 +1009,22 @@ func resumableRow(planned PlannedRun) (*ReportRow, bool) {
 	}
 	enrichPlannedRow(&raw, planned)
 	return &raw, true
+}
+
+func validateResultPoint(row ReportRow, label string, expectedRequests, expectedConcurrency int) error {
+	if row.Completed != expectedRequests {
+		return fmt.Errorf("%s result completed %d request(s), want exactly %d", label, row.Completed, expectedRequests)
+	}
+	if row.Concurrency != expectedConcurrency {
+		return fmt.Errorf("%s result concurrency = %d, want %d", label, row.Concurrency, expectedConcurrency)
+	}
+	if !row.promptTokensKnown || !row.completionTokensKnown || !row.totalTokensKnown {
+		return fmt.Errorf("%s result is missing canonical token totals", label)
+	}
+	if !row.outputTokensPerSecKnown || !row.totalTokensPerSecKnown {
+		return fmt.Errorf("%s result is missing canonical throughput fields", label)
+	}
+	return nil
 }
 
 // resultMatchesShape compares the recorded mean token shape against the

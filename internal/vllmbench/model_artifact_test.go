@@ -233,25 +233,44 @@ func assertRunCount(t *testing.T, path string, want int) {
 	}
 }
 
-func TestWriteSQLiteArtifactNoopWithoutPath(t *testing.T) {
-	if err := WriteSQLiteArtifact(t.TempDir(), "", testSpec(), RunSummary{}, nil, ""); err != nil {
-		t.Fatalf("WriteSQLiteArtifact without path = %v, want nil", err)
+func TestSQLiteArtifactWriteNoopWithoutPath(t *testing.T) {
+	if err := writeSQLiteArtifact(t.TempDir(), "", testSpec(), RunSummary{}, ""); err != nil {
+		t.Fatalf("writeSQLiteArtifact without path = %v, want nil", err)
 	}
 }
 
-func TestWriteSQLiteArtifactRemovesFreshFileOnFailedWrite(t *testing.T) {
+func TestSQLiteArtifactWriteRejectsInvalidSpecBeforeCreatingFile(t *testing.T) {
 	dir := t.TempDir()
 	artifactPath := filepath.Join(dir, "model.sqlite")
 	spec := testSpec()
-	// Duplicate workload names violate the artifact's unique constraint,
-	// failing the first write; the fresh file must not be left behind.
-	spec.Workloads = append(spec.Workloads, spec.Workloads[0])
-	err := WriteSQLiteArtifact(filepath.Join(dir, "run"), artifactPath, spec, RunSummary{StartedAt: time.Now()}, nil, "")
+	// Artifact writing repeats spec validation at the persistence boundary.
+	// An invalid run must not leave a file behind.
+	spec.Workloads[0].Role = ""
+	err := writeSQLiteArtifact(filepath.Join(dir, "run"), artifactPath, spec, RunSummary{StartedAt: time.Now()}, "")
 	if err == nil {
-		t.Fatal("write with duplicate workloads succeeded")
+		t.Fatal("write with invalid workload succeeded")
 	}
 	if _, statErr := os.Stat(artifactPath); statErr == nil {
 		t.Fatal("failed first write left a schema-only artifact behind")
+	}
+}
+
+func TestSQLiteArtifactWriteRemovesFreshFileWhenRunEvidenceIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "events.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(dir, "model.sqlite")
+	err := writeSQLiteArtifact(runDir, artifactPath, testSpec(), RunSummary{StartedAt: time.Now()}, "")
+	if err == nil || !strings.Contains(err.Error(), "normalized spec") {
+		t.Fatalf("write error = %v, want missing normalized spec", err)
+	}
+	if _, statErr := os.Stat(artifactPath); !os.IsNotExist(statErr) {
+		t.Fatalf("failed first write left an artifact: %v", statErr)
 	}
 }
 

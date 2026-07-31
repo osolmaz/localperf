@@ -43,9 +43,6 @@ go:
     - from: cmd/localperf
       allow:
         - internal/benchcli
-    - from: cmd/localperf-vllm-bench
-      allow:
-        - internal/benchcli
     - from: internal/benchcli
       allow:
         - internal/artifact

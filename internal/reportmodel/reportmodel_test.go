@@ -75,33 +75,6 @@ func TestBuildLabelsUnverifiedContext(t *testing.T) {
 	}
 }
 
-func TestBuildKeepsLegacyMeasuredContextsSeparate(t *testing.T) {
-	doc := report.SQLiteReportDocument{
-		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		ThroughputRows: []report.SQLiteReportThroughputRow{
-			legacyThroughputRow(1, "1024 in / 4096 out"),
-			legacyThroughputRow(4, "4096 in / 16 out"),
-		},
-	}
-
-	tables := Build("/tmp/report.sqlite", doc).Throughput.Tables
-	if len(tables) != 2 {
-		t.Fatalf("tables = %d, want one table per measured legacy context", len(tables))
-	}
-	got := map[string]bool{}
-	for _, table := range tables {
-		got[table.ContextLabel] = true
-		if table.ContextStatus != "legacy_unverified" {
-			t.Fatalf("table %q status = %q, want legacy_unverified", table.ContextLabel, table.ContextStatus)
-		}
-	}
-	for _, want := range []string{"1024 in / 4096 out", "4096 in / 16 out"} {
-		if !got[want] {
-			t.Fatalf("context labels = %v, missing %q", got, want)
-		}
-	}
-}
-
 func throughputRow(runID, profile, contextLabel string, contextSortKey, concurrency int) report.SQLiteReportThroughputRow {
 	return throughputRowWithProfileID(runID, "profile-1", profile, contextLabel, contextSortKey, concurrency)
 }
@@ -132,13 +105,6 @@ func throughputRowWithProfileID(runID, profileID, profile, contextLabel string, 
 			Shape:         contextLabel,
 		},
 	}
-}
-
-func legacyThroughputRow(concurrency int, contextLabel string) report.SQLiteReportThroughputRow {
-	row := throughputRow("run-1", "32k", contextLabel, 0, concurrency)
-	row.ContextWindow = 32768
-	row.Detail.ContextLabel = contextLabel
-	return row
 }
 
 func TestSkippedPointStaysInDeclaredContextTable(t *testing.T) {

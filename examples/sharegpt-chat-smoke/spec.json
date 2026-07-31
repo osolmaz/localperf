@@ -1,9 +1,17 @@
 {
-  "version": "2",
+  "version": "1",
   "name": "ShareGPT Chat Smoke",
   "description": "One-sample ShareGPT chat smoke benchmark for the canonical dataset pipeline.",
   "model": "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
   "output_dir": "runs",
+  "engines": [
+    {
+      "name": "vllm",
+      "type": "vllm-managed",
+      "command": "vllm",
+      "bench_command": "vllm"
+    }
+  ],
   "runner": {
     "append_timestamp_to_run": false,
     "stop_managed_on_exit": true
@@ -17,6 +25,7 @@
   "profiles": [
     {
       "name": "smoke",
+      "engine": "vllm",
       "port": 8101,
       "managed": true,
       "max_model_len": 4096,
@@ -28,6 +37,7 @@
   "workloads": [
     {
       "name": "sharegpt-chat-smoke",
+      "role": "diagnostic",
       "phase": "decode",
       "context_target": 4096,
       "context_semantics": "capacity",
@@ -50,12 +60,11 @@
         "temperature": 0,
         "ignore_eos": false
       },
-      "load": {
-        "max_concurrency": [
-          1
-        ],
-        "request_rate": "inf"
-      }
+      "load_generator": "localperf_http",
+      "request_rate": "inf",
+      "max_concurrency": [
+        1
+      ]
     }
   ]
 }

@@ -114,6 +114,7 @@ type SQLiteReportProfile struct {
 type SQLiteReportWorkload struct {
 	ID                      string
 	Name                    string
+	Role                    string
 	Phase                   string
 	Samples                 int
 	Repeats                 int
@@ -424,14 +425,14 @@ type SQLiteReportArtifactSummary struct {
 }
 
 func LoadSQLiteReport(path string) (SQLiteReportDocument, error) {
+	if err := artifact.Check(path); err != nil {
+		return SQLiteReportDocument{}, err
+	}
 	db, err := artifact.OpenReadOnly(path)
 	if err != nil {
 		return SQLiteReportDocument{}, err
 	}
 	defer db.Close()
-	if err := artifact.CheckHeader(db); err != nil {
-		return SQLiteReportDocument{}, err
-	}
 	doc := SQLiteReportDocument{
 		ArtifactPath:       path,
 		GeneratedAt:        time.Now().UTC(),
@@ -791,8 +792,8 @@ func loadSQLiteReportProfiles(db *sql.DB, doc *SQLiteReportDocument) error {
 
 func loadSQLiteReportWorkloads(db *sql.DB, doc *SQLiteReportDocument) error {
 	rows, err := db.Query(`SELECT
-		id, name, phase, samples, repeats, save_detailed, capture_payload_artifacts
-		FROM workloads ORDER BY phase, name`)
+		id, name, role, phase, samples, repeats, save_detailed, capture_payload_artifacts
+		FROM workloads WHERE role = 'benchmark' ORDER BY phase, name`)
 	if err != nil {
 		return err
 	}
@@ -800,7 +801,7 @@ func loadSQLiteReportWorkloads(db *sql.DB, doc *SQLiteReportDocument) error {
 	for rows.Next() {
 		var workload SQLiteReportWorkload
 		var saveDetailed, capture int
-		if err := rows.Scan(&workload.ID, &workload.Name, &workload.Phase, &workload.Samples, &workload.Repeats, &saveDetailed, &capture); err != nil {
+		if err := rows.Scan(&workload.ID, &workload.Name, &workload.Role, &workload.Phase, &workload.Samples, &workload.Repeats, &saveDetailed, &capture); err != nil {
 			return err
 		}
 		workload.SaveDetailed = saveDetailed != 0
@@ -826,6 +827,7 @@ func loadSQLiteReportMeasurements(db *sql.DB, doc *SQLiteReportDocument) error {
 		FROM measurements m
 		JOIN profiles p ON p.id = m.profile_id
 		JOIN workloads w ON w.id = m.workload_id
+		WHERE w.role = 'benchmark'
 		ORDER BY w.phase, COALESCE(p.context_window, 0), p.name, w.name, m.concurrency, m.repeat_index`)
 	if err != nil {
 		return err
@@ -976,9 +978,8 @@ func applySQLiteMeasurementDisplay(measurement *SQLiteReportMeasurement, metrics
 }
 
 // applyTTFTDisplay renders TTFT only from measurements whose stats carry the
-// streamed-source marker. Anything else — including artifacts written before
-// streaming support existed — shows "-": those runs never measured first
-// token time, and an unmarked number would be end-to-end latency in disguise.
+// streamed-source marker. Anything else shows "-" because an unmarked number
+// does not prove that first-token time was measured.
 func applyTTFTDisplay(measurement *SQLiteReportMeasurement, metrics map[string]SQLiteReportMetric) {
 	if measurement.TTFTSource != "stream" {
 		measurement.TTFTMeanMS = "-"
@@ -995,8 +996,13 @@ func applyTTFTDisplay(measurement *SQLiteReportMeasurement, metrics map[string]S
 
 func loadSQLiteReportMetrics(db *sql.DB, doc *SQLiteReportDocument) error {
 	rows, err := db.Query(`SELECT
-		measurement_id, metric, unit, mean, stddev, min, p50, p90, p95, p99, max, count
-		FROM metric_stats ORDER BY measurement_id, metric, unit`)
+		stats.measurement_id, stats.metric, stats.unit, stats.mean, stats.stddev, stats.min,
+		stats.p50, stats.p90, stats.p95, stats.p99, stats.max, stats.count
+		FROM metric_stats AS stats
+		JOIN measurements AS measurement ON measurement.id = stats.measurement_id
+		JOIN workloads AS workload ON workload.id = measurement.workload_id
+		WHERE workload.role = 'benchmark'
+		ORDER BY stats.measurement_id, stats.metric, stats.unit`)
 	if err != nil {
 		return err
 	}
@@ -1028,11 +1034,7 @@ func loadSQLiteReportMetrics(db *sql.DB, doc *SQLiteReportDocument) error {
 }
 
 func loadSQLiteReportRequestSummary(db *sql.DB, doc *SQLiteReportDocument) error {
-	hasRequestOutputTokS, err := sqliteRequestTableHasColumn(db, "output_tok_s")
-	if err != nil {
-		return err
-	}
-	means, hasDetailedOutputTokS, err := loadSQLiteDetailedRequestSummary(db, doc, hasRequestOutputTokS)
+	means, hasDetailedOutputTokS, err := loadSQLiteDetailedRequestSummary(db, doc)
 	if err != nil {
 		return err
 	}
@@ -1057,11 +1059,11 @@ type sqliteReportSummaryMeans struct {
 	outputTokS sqliteReportWeightedMean
 }
 
-func loadSQLiteDetailedRequestSummary(db *sql.DB, doc *SQLiteReportDocument, includeOutputTokS bool) (sqliteReportSummaryMeans, bool, error) {
+func loadSQLiteDetailedRequestSummary(db *sql.DB, doc *SQLiteReportDocument) (sqliteReportSummaryMeans, bool, error) {
 	var means sqliteReportSummaryMeans
 	var latencyMean, ttftMean, tpotMean, itlMean, outputTokSMean sql.NullFloat64
 	var latencyCount, ttftCount, tpotCount, itlCount, outputTokSCount int
-	err := db.QueryRow(sqliteDetailedRequestSummaryQuery(includeOutputTokS)).Scan(
+	err := db.QueryRow(sqliteDetailedRequestSummaryQuery()).Scan(
 		&doc.RequestSummary.Total, &doc.RequestSummary.Completed, &doc.RequestSummary.Failed,
 		&doc.RequestSummary.Canceled, &latencyMean, &latencyCount, &ttftMean, &ttftCount,
 		&tpotMean, &tpotCount, &itlMean, &itlCount, &outputTokSMean, &outputTokSCount)
@@ -1076,46 +1078,30 @@ func loadSQLiteDetailedRequestSummary(db *sql.DB, doc *SQLiteReportDocument, inc
 	return means, outputTokSCount > 0, nil
 }
 
-func sqliteDetailedRequestSummaryQuery(includeOutputTokS bool) string {
-	outputTokSSelect := "CAST(NULL AS REAL), 0"
-	if includeOutputTokS {
-		outputTokSSelect = "AVG(output_tok_s), COUNT(output_tok_s)"
-	}
+func sqliteDetailedRequestSummaryQuery() string {
 	return `SELECT
 		COUNT(*),
-		COALESCE(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
-		COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0),
-		AVG(latency_ms), COUNT(latency_ms),
-		AVG(ttft_ms), COUNT(ttft_ms),
-		AVG(tpot_ms), COUNT(tpot_ms),
-		AVG(itl_mean_ms), COUNT(itl_mean_ms),
-		` + outputTokSSelect + `
-		FROM requests`
-}
-
-func sqliteRequestTableHasColumn(db *sql.DB, name string) (bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(requests)`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var columnName, columnType string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, err
-		}
-		if columnName == name {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
+		COALESCE(SUM(CASE WHEN r.status = 'completed' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN r.status = 'canceled' THEN 1 ELSE 0 END), 0),
+		AVG(r.latency_ms), COUNT(r.latency_ms),
+		AVG(r.ttft_ms), COUNT(r.ttft_ms),
+		AVG(r.tpot_ms), COUNT(r.tpot_ms),
+		AVG(r.itl_mean_ms), COUNT(r.itl_mean_ms),
+		AVG(r.output_tok_s), COUNT(r.output_tok_s)
+		FROM requests r
+		JOIN measurements m ON m.id = r.measurement_id
+		JOIN workloads w ON w.id = m.workload_id
+		WHERE w.role = 'benchmark'`
 }
 
 func sqliteRequestRowsByMeasurement(db *sql.DB) (map[int64]int, error) {
-	rows, err := db.Query(`SELECT measurement_id, COUNT(*) FROM requests GROUP BY measurement_id`)
+	rows, err := db.Query(`SELECT r.measurement_id, COUNT(*)
+		FROM requests r
+		JOIN measurements m ON m.id = r.measurement_id
+		JOIN workloads w ON w.id = m.workload_id
+		WHERE w.role = 'benchmark'
+		GROUP BY r.measurement_id`)
 	if err != nil {
 		return nil, err
 	}

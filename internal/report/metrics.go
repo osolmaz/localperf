@@ -11,8 +11,7 @@ import (
 
 // MetricDef defines one reported quantity exactly once: the report legend
 // and the computation both come from this registry, so the definition shown
-// to the reader cannot drift from what is rendered. See
-// docs/2026-07-02-reporting-completeness-plan.md.
+// to the reader cannot drift from what is rendered.
 type MetricDef struct {
 	Key        string
 	Label      string
@@ -111,14 +110,8 @@ type sqliteRequestDerived struct {
 
 func loadSQLiteReportRequestDerived(db *sql.DB, doc *SQLiteReportDocument) error {
 	doc.RequestDerived = map[int64]sqliteRequestDerived{}
-	hasITL, err := sqliteRequestTableHasColumn(db, "itl_mean_ms")
-	if err != nil {
+	if err := loadTokenWeightedITL(db, doc); err != nil {
 		return err
-	}
-	if hasITL {
-		if err := loadTokenWeightedITL(db, doc); err != nil {
-			return err
-		}
 	}
 	if err := loadAchievedConcurrency(db, doc); err != nil {
 		return err

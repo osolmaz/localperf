@@ -165,7 +165,7 @@ TPOT and ITL differ in weighting and must not be presented as
 interchangeable: TPOT treats every request equally and describes per-user
 experience; ITL weights by generated tokens and describes steady-state system
 behavior. State the weighting wherever either number is shown; the reporting
-implementation follows `2026-07-02-reporting-completeness-plan.md`.
+metric registry in `internal/report/metrics.go` defines the displayed terms.
 
 Keep the workload shape explicit:
 

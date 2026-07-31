@@ -200,10 +200,10 @@ func mergeStatements(offsets map[string]int64) []string {
 				s.context_window, s.max_num_seqs, s.max_num_batched_tokens, s.gpu_memory_utilization, s.enable_sleep_mode, s.sleep_level,
 				s.serve_json, s.engine_args_json, s.env_json, s.metadata_json
 			FROM src.profiles s WHERE %s`, rescope("s.id"), rescope("s.engine_id"), inMergedRuns),
-		fmt.Sprintf(`INSERT INTO main.workloads (id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
-				save_detailed, capture_payload_artifacts, dataset_json, request_json, load_json, metadata_json)
-			SELECT %s, s.run_id, s.name, s.phase, s.traffic_json, s.concurrency_json, s.samples, s.repeats,
-				s.save_detailed, s.capture_payload_artifacts, s.dataset_json, s.request_json, s.load_json, s.metadata_json
+		fmt.Sprintf(`INSERT INTO main.workloads (id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
+				save_detailed, capture_payload_artifacts, dataset_json, request_json, metadata_json)
+			SELECT %s, s.run_id, s.name, s.role, s.phase, s.traffic_json, s.concurrency_json, s.samples, s.repeats,
+				s.save_detailed, s.capture_payload_artifacts, s.dataset_json, s.request_json, s.metadata_json
 			FROM src.workloads s WHERE %s`, rescope("s.id"), inMergedRuns),
 		fmt.Sprintf(`INSERT INTO main.datasets (id, run_id, workload_id, type, uri, path, split, selection, sample_count, seed,
 				config_json, canonical_path, rendered_path, request_count, sha256, metadata_json)

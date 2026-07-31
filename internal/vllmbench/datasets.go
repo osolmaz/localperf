@@ -47,12 +47,6 @@ type RequestSpec struct {
 	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
-type LoadConfig struct {
-	MaxConcurrency []int  `json:"max_concurrency,omitempty"`
-	RequestRate    string `json:"request_rate,omitempty"`
-	Generator      string `json:"generator,omitempty"`
-}
-
 type CanonicalRequest struct {
 	ID                   string            `json:"id"`
 	Ordinal              int               `json:"ordinal"`
@@ -251,10 +245,7 @@ func applyMaterializedDatasetToWorkload(workload *Workload, requestCount int, vl
 	if workload.BenchmarkTrafficConfig.Backend == "openai-chat" {
 		workload.BenchmarkTrafficConfig.SkipChatTemplate = true
 	}
-	workload.BenchmarkTrafficConfig.RequestRate = firstNonEmpty(workload.BenchmarkTrafficConfig.RequestRate, workload.Load.RequestRate, "inf")
-	if len(workload.MaxConcurrency) == 0 && len(workload.Load.MaxConcurrency) > 0 {
-		workload.MaxConcurrency = append([]int(nil), workload.Load.MaxConcurrency...)
-	}
+	workload.BenchmarkTrafficConfig.RequestRate = firstNonEmpty(workload.BenchmarkTrafficConfig.RequestRate, "inf")
 	if workload.Request.IgnoreEOS {
 		workload.IgnoreEOS = true
 	}
@@ -671,35 +662,22 @@ func readCanonicalJSONL(path string, requestSpec RequestSpec) ([]CanonicalReques
 
 func canonicalJSONLRequest(index int, raw json.RawMessage, requestSpec RequestSpec) (CanonicalRequest, error) {
 	var request CanonicalRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
 		return CanonicalRequest{}, err
 	}
-	aliases := canonicalRequestAliases(raw)
 	request.Raw = append(json.RawMessage(nil), raw...)
 	request.SourceRecordID = firstNonEmpty(request.SourceRecordID, request.ID, fmt.Sprintf("custom-%06d", index+1))
 	request.Mode = firstNonEmpty(request.Mode, requestSpec.Mode, "chat")
 	if request.MaxOutputTokens <= 0 {
-		request.MaxOutputTokens = firstNonZeroInt(requestSpec.MaxOutputTokens, aliases.OutputTokens, aliases.MaxTokens)
-	}
-	if request.OutputTokensExpected <= 0 {
-		request.OutputTokensExpected = firstNonZeroInt(aliases.OutputTokens, aliases.MaxTokens)
+		request.MaxOutputTokens = requestSpec.MaxOutputTokens
 	}
 	if request.Temperature == nil {
 		request.Temperature = requestSpec.Temperature
 	}
 	request.IgnoreEOS = request.IgnoreEOS || requestSpec.IgnoreEOS
 	return request, nil
-}
-
-type canonicalRequestOutputAliases struct {
-	OutputTokens int `json:"output_tokens"`
-	MaxTokens    int `json:"max_tokens"`
-}
-
-func canonicalRequestAliases(raw json.RawMessage) canonicalRequestOutputAliases {
-	var aliases canonicalRequestOutputAliases
-	_ = json.Unmarshal(raw, &aliases)
-	return aliases
 }
 
 type rawPayloadDatasetAdapter struct{}

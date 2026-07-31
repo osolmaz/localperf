@@ -59,6 +59,30 @@ func TestTokenWeightedITLAndDerivedRequestMetrics(t *testing.T) {
 	}
 }
 
+func TestDiagnosticWorkloadsAreExcludedFromBenchmarkViews(t *testing.T) {
+	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
+	createTestSQLiteHTMLArtifact(t, artifactPath, "Diagnostic")
+	db, err := sql.Open("sqlite", artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE workloads SET role = 'diagnostic'`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := LoadSQLiteReport(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Workloads) != 0 || len(doc.Measurements) != 0 || len(doc.ThroughputRows) != 0 || doc.RequestSummary.Total != 0 {
+		t.Fatalf("diagnostic data reached benchmark views: workloads=%d measurements=%d throughput=%d requests=%d", len(doc.Workloads), len(doc.Measurements), len(doc.ThroughputRows), doc.RequestSummary.Total)
+	}
+}
+
 func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
 	createTestSQLiteHTMLArtifact(t, artifactPath, "Repeats")
@@ -144,8 +168,8 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 
 func TestTTFTHiddenWithoutStreamedSource(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
-	// The fixture seeds request_ttft stats but no ttft_source marker —
-	// exactly the shape of artifacts written before streaming support.
+	// The fixture seeds request_ttft stats but no ttft_source marker, so the
+	// value lacks the provenance needed for reporting.
 	createTestSQLiteHTMLArtifact(t, artifactPath, "TTFTGate")
 	doc, err := LoadSQLiteReport(artifactPath)
 	if err != nil {
@@ -171,7 +195,7 @@ func TestSLOTTFTTargetRequiresStreamedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE workloads SET metadata_json = '{"slo":{"ttft_p95_ms":500}}' WHERE id = 'workload-1'`); err != nil {
+	if _, err := db.Exec(`UPDATE workloads SET metadata_json = '{"context":{"target":8192,"semantics":"capacity"},"slo":{"ttft_p95_ms":500}}' WHERE id = 'workload-1'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -198,7 +222,7 @@ func TestSLOGoodputDerivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`UPDATE workloads SET metadata_json = '{"slo":{"ttft_p95_ms":500}}' WHERE id = 'workload-1'`); err != nil {
+	if _, err := db.Exec(`UPDATE workloads SET metadata_json = '{"context":{"target":8192,"semantics":"capacity"},"slo":{"ttft_p95_ms":500}}' WHERE id = 'workload-1'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}' WHERE id = 1`); err != nil {
@@ -276,8 +300,8 @@ func TestMultiRunReportAggregatesAcrossRuns(t *testing.T) {
 			'{"identity":{"8k":{"models":{"data":[{"id":"served/other-model"}]}}}}')`,
 		`INSERT INTO profiles (id, run_id, engine_id, name, model, port, managed, context_window, serve_json)
 			VALUES ('run-2/8k', 'run-2', 'run-2/vllm', '8k', 'nvidia/diffusiongemma-26B-A4B-it-NVFP4', 8108, 1, 8192, '{}')`,
-		`INSERT INTO workloads (id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats, save_detailed, capture_payload_artifacts)
-			VALUES ('run-2/prefill-8k', 'run-2', 'prefill-8k', 'prefill', '{}', '[4]', 8, 1, 1, 0)`,
+		`INSERT INTO workloads (id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats, save_detailed, capture_payload_artifacts, metadata_json)
+			VALUES ('run-2/prefill-8k', 'run-2', 'prefill-8k', 'benchmark', 'prefill', '{}', '[4]', 8, 1, 1, 0, '{"context":{"target":8192,"semantics":"capacity"}}')`,
 		`INSERT INTO measurements (run_id, profile_id, workload_id, repeat_index, concurrency, samples_requested,
 			status, started_at, completed_at, wall_time_ms, completed_requests, failed_requests,
 			prompt_tokens, completion_tokens, total_tokens, aggregate_output_tok_s, per_user_output_tok_s, aggregate_total_tok_s)

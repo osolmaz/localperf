@@ -371,23 +371,7 @@ func tableContextStatus(builder *tableBuilder) (string, string) {
 	case builder.claimSemantics == "capacity" && builder.claimTarget > 0:
 		return "capacity", "Capacity"
 	default:
-		return "legacy_unverified", "Legacy/unverified"
-	}
-}
-
-func contextSemantics(label string) string {
-	label = strings.ToLower(strings.TrimSpace(label))
-	switch {
-	case label == "":
-		return "legacy_unverified"
-	case strings.Contains(label, "active context"):
-		return "active_verified"
-	case strings.Contains(label, "capacity"):
-		return "capacity"
-	case strings.Contains(label, "unverified"):
-		return "unverified"
-	default:
-		return "legacy_unverified"
+		return "unverified", "Unverified"
 	}
 }
 
@@ -396,8 +380,6 @@ func tableWarning(status string, completedRows int, mismatches []string) string 
 		return "Context mismatch: " + strings.Join(uniqueStrings(mismatches), "; ")
 	}
 	switch status {
-	case "legacy_unverified":
-		return "Legacy/unverified: server limit only. This does not prove active 8k/16k/32k context."
 	case "capacity":
 		return "Capacity point: this table is labeled by server limit, not by active request context."
 	case "unverified":
@@ -582,19 +564,10 @@ func sortedMapKeys(values map[string]struct{}) []string {
 }
 
 func contextGroupLabel(row report.SQLiteReportThroughputRow) string {
-	label := strings.TrimSpace(row.ContextLabel)
-	if row.ContextMismatch && label != "" {
+	if label := strings.TrimSpace(row.ContextLabel); label != "" {
 		return label
 	}
-	switch contextSemantics(label) {
-	case "active_verified", "capacity", "unverified":
-		return label
-	default:
-		if label != "" {
-			return label
-		}
-		return "legacy/unverified"
-	}
+	return "unverified"
 }
 
 func contextLabel(tokens int) string {

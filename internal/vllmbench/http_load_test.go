@@ -14,20 +14,20 @@ import (
 func TestValidateHTTPResult(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good.json")
-	writeFile(t, good, `{"completed":1,"failed":0,"output_throughput":12.5}`)
-	if err := validateParsedResult(good, "localperf_http"); err != nil {
+	writeFile(t, good, `{"completed":1,"failed":0,"max_concurrency":1,"total_input_tokens":8,"total_output_tokens":4,"total_tokens":12,"output_throughput":12.5,"total_token_throughput":20}`)
+	if err := validateParsedResult(good, "localperf_http", 1, 1); err != nil {
 		t.Fatalf("validate good result: %v", err)
 	}
 
 	failed := filepath.Join(dir, "failed.json")
 	writeFile(t, failed, `{"completed":1,"failed":2}`)
-	if err := validateParsedResult(failed, "localperf_http"); err == nil {
+	if err := validateParsedResult(failed, "localperf_http", 1, 1); err == nil {
 		t.Fatal("expected failed request result to fail validation")
 	}
 
 	empty := filepath.Join(dir, "empty.json")
 	writeFile(t, empty, "")
-	if err := validateParsedResult(empty, "localperf_http"); err == nil {
+	if err := validateParsedResult(empty, "localperf_http", 1, 1); err == nil {
 		t.Fatal("expected empty result to fail validation")
 	}
 

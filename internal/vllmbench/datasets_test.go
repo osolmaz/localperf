@@ -161,6 +161,16 @@ func TestCustomJSONLAndRawPayloadAdapters(t *testing.T) {
 	}
 }
 
+func TestCustomJSONLAdapterRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "custom.jsonl")
+	writeFile(t, path, `{"id":"one","prompt":"hello","output_tokens":3}
+`)
+	_, _, err := (customJSONLDatasetAdapter{}).Open(context.Background(), DatasetSpec{Path: path}, RequestSpec{})
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("custom JSONL alias error = %v, want unknown field rejection", err)
+	}
+}
+
 func TestCustomJSONLAdapterAppliesRandomSelection(t *testing.T) {
 	dir := t.TempDir()
 	customPath := filepath.Join(dir, "custom.jsonl")

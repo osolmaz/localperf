@@ -191,6 +191,8 @@ CREATE TABLE workloads (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('benchmark', 'diagnostic')),
+  phase TEXT NOT NULL DEFAULT 'mixed',
   traffic_json TEXT NOT NULL CHECK (json_valid(traffic_json)),
   concurrency_json TEXT NOT NULL CHECK (json_valid(concurrency_json)),
   samples INTEGER NOT NULL CHECK (samples > 0),
@@ -199,6 +201,8 @@ CREATE TABLE workloads (
   capture_payload_artifacts INTEGER NOT NULL DEFAULT 0 CHECK (
     capture_payload_artifacts IN (0, 1)
   ),
+  dataset_json TEXT CHECK (dataset_json IS NULL OR json_valid(dataset_json)),
+  request_json TEXT CHECK (request_json IS NULL OR json_valid(request_json)),
   metadata_json TEXT CHECK (
     metadata_json IS NULL OR json_valid(metadata_json)
   ),
@@ -533,9 +537,8 @@ Unknown telemetry is allowed, but it must use a clear `source`, `name`, and
 
 ## Column Conventions
 
-Additive conventions for existing columns, introduced by
-`2026-07-02-reporting-completeness-plan.md`. None of these change the schema
-or the format version; absent values simply render as unavailable.
+These current-column conventions do not change the schema or format version;
+absent optional values render as unavailable.
 
 - `run.host_json`: hardware inventory captured at run start. Expected keys:
   `cpu`, `ram_gib`, and `gpus` (a list of `{name, vram_gib, driver}`), plus
@@ -636,6 +639,11 @@ The validator must check:
   normalized spec.
 - original and normalized specs exist and match their SHA-256 values.
 - JSON columns contain valid JSON.
+- every workload has an allowed `role` and explicit `context_target` and
+  `context_semantics` evidence.
+- every `benchmark` workload and measurement requests at least
+  `max(8, 2 * concurrency)` samples at each point.
+- every measurement uses a concurrency declared by its workload.
 - foreign keys are valid.
 - completed measurements have throughput, token, and request counts.
 - completed measurements have `metric_stats` rows for the metrics they
@@ -647,18 +655,20 @@ The validator must check:
 - prompt and response payload artifacts are absent unless capture was enabled.
 - final run status is one of the allowed values.
 
-## Compatibility
+## Accepted format
 
-Readers must reject unsupported major format versions. For v1, the supported
-format is:
+Readers accept only the current schema with these metadata values:
 
 ```text
 format_name     localperf_run
 format_version  1
 ```
 
-Future schema changes should be additive when possible. Breaking changes should
-use `format_version = 2`.
+LocalPerf does not provide migration readers, aliases, or fallback behavior for
+older v1 schemas. Schema changes replace the v1 contract in place. Recreate an
+artifact with the current `localperf bench run` command when validation rejects
+an older file. Diagnostic workloads remain stored as evidence but report and
+comparison queries include only workloads whose role is `benchmark`.
 
 ## Boundaries
 

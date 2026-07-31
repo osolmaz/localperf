@@ -22,6 +22,9 @@ func TestArtifactIngestsIdentityAndGPUTelemetryEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := testSpec()
+	if err := writeJSONFile(filepath.Join(runDir, "spec.normalized.json"), RedactedSpec(spec)); err != nil {
+		t.Fatal(err)
+	}
 	plan := BuildPlan(spec, runDir)
 	if len(plan) == 0 {
 		t.Fatal("plan is empty")
@@ -70,7 +73,7 @@ func TestArtifactIngestsIdentityAndGPUTelemetryEvents(t *testing.T) {
 
 	artifactPath := filepath.Join(dir, "run.sqlite")
 	summary := RunSummary{RunDir: runDir, StartedAt: now, FinishedAt: now, PlannedRuns: len(plan)}
-	if err := WriteSQLiteArtifact(runDir, artifactPath, spec, summary, plan, ""); err != nil {
+	if err := writeSQLiteArtifact(runDir, artifactPath, spec, summary, ""); err != nil {
 		t.Fatal(err)
 	}
 

@@ -77,12 +77,12 @@ func TestRenderSQLiteHTMLReportShowsFailedCellsAndProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
 		save_detailed, capture_payload_artifacts, metadata_json
 	) VALUES (
-		'workload-failed', 'run-1', 'decode-8k', 'decode',
+		'workload-failed', 'run-1', 'decode-8k', 'benchmark', 'decode',
 		'{"dataset_name":"random","random_input_len":8192,"random_output_len":1024}',
-		'[16]', 1, 1, 1, 0,
+		'[16]', 32, 1, 1, 0,
 		'{"context":{"target":8192,"semantics":"active"}}'
 	)`); err != nil {
 		_ = db.Close()
@@ -92,7 +92,7 @@ func TestRenderSQLiteHTMLReportShowsFailedCellsAndProvenance(t *testing.T) {
 		run_id, profile_id, workload_id, repeat_index, concurrency, samples_requested,
 		status, completed_requests, failed_requests, error_type, error_message
 	) VALUES (
-		'run-1', 'profile-1', 'workload-failed', 0, 16, 1,
+		'run-1', 'profile-1', 'workload-failed', 0, 16, 32,
 		'skipped', 0, 0, 'memory_floor',
 		'MemAvailable 34.2 GiB is below memory floor 40.0 GiB'
 	)`)
@@ -154,12 +154,12 @@ func TestRenderSQLiteHTMLReportDoesNotLabelPlannedRowsAsFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
 		save_detailed, capture_payload_artifacts, metadata_json
 	) VALUES (
-		'workload-planned', 'run-1', 'decode-dry-run', 'decode',
+		'workload-planned', 'run-1', 'decode-dry-run', 'benchmark', 'decode',
 		'{"dataset_name":"random","random_input_len":1024,"random_output_len":256}',
-		'[1]', 1, 1, 1, 0,
+		'[1]', 8, 1, 1, 0,
 		'{"context":{"target":4096,"semantics":"capacity"}}'
 	)`); err != nil {
 		_ = db.Close()
@@ -169,7 +169,7 @@ func TestRenderSQLiteHTMLReportDoesNotLabelPlannedRowsAsFailures(t *testing.T) {
 		run_id, profile_id, workload_id, repeat_index, concurrency, samples_requested,
 		status, completed_requests, failed_requests
 	) VALUES (
-		'run-1', 'profile-1', 'workload-planned', 0, 1, 1,
+		'run-1', 'profile-1', 'workload-planned', 0, 1, 8,
 		'planned', 0, 0
 	)`); err != nil {
 		_ = db.Close()
@@ -254,9 +254,9 @@ func TestContextLabelsFollowContract(t *testing.T) {
 func insertContextWorkloadMeasurement(t *testing.T, db *sql.DB, workloadID, phase, claims string, promptTokens, completionTokens int) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
 		save_detailed, capture_payload_artifacts, metadata_json
-	) VALUES (?, 'run-1', ?, ?, '{"dataset_name":"random"}', '[1]', 2, 1, 1, 0, ?)`,
+	) VALUES (?, 'run-1', ?, 'benchmark', ?, '{"dataset_name":"random"}', '[1]', 8, 1, 1, 0, ?)`,
 		workloadID, workloadID, phase, claims); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func insertContextWorkloadMeasurement(t *testing.T, db *sql.DB, workloadID, phas
 		prompt_tokens, completion_tokens, total_tokens, aggregate_output_tok_s,
 		per_user_output_tok_s, aggregate_total_tok_s
 	) VALUES (
-		'run-1', 'profile-1', ?, 0, 1, 2, 'completed',
+		'run-1', 'profile-1', ?, 0, 1, 8, 'completed',
 		'2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 60000, 2, 0, ?, ?, ?, 10, 10, 12
 	)`, workloadID, promptTokens, completionTokens, promptTokens+completionTokens)
 	if err != nil {
@@ -534,7 +534,7 @@ func TestWriteSQLiteHTMLReportStoresArtifact(t *testing.T) {
 	}
 }
 
-func TestWriteSQLiteHTMLReportDoesNotRequireFullArtifactHashCheck(t *testing.T) {
+func TestWriteSQLiteHTMLReportRequiresFullArtifactValidation(t *testing.T) {
 	artifactPath := testSQLiteHTMLArtifact(t, "Readable With Bad Raw Artifact")
 	db, err := sql.Open("sqlite", artifactPath)
 	if err != nil {
@@ -555,15 +555,11 @@ func TestWriteSQLiteHTMLReportDoesNotRequireFullArtifactHashCheck(t *testing.T) 
 		t.Fatal("artifact.Check error = nil, want full validation failure")
 	}
 	outputPath := filepath.Join(t.TempDir(), "report.html")
-	if err := WriteSQLiteHTMLReport(artifactPath, outputPath, HTMLReportOptions{}); err != nil {
-		t.Fatal(err)
+	if err := WriteSQLiteHTMLReport(artifactPath, outputPath, HTMLReportOptions{}); err == nil {
+		t.Fatal("render accepted an artifact with invalid evidence hash")
 	}
-	html, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(html), "Readable With Bad Raw Artifact") {
-		t.Fatalf("HTML report missing run title:\n%s", html)
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Fatalf("failed render wrote output: %v", err)
 	}
 }
 
@@ -726,37 +722,6 @@ func TestLoadSQLiteReportMergesDetailedAndAggregateOnlySummary(t *testing.T) {
 	}
 }
 
-func TestWriteSQLiteHTMLReportRendersOlderRequestSchema(t *testing.T) {
-	artifactPath := testSQLiteHTMLArtifact(t, "Older Request Schema")
-	db, err := sql.Open("sqlite", artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`ALTER TABLE requests DROP COLUMN output_tok_s`); err != nil {
-		_ = db.Close()
-		t.Fatalf("drop output_tok_s: %v", err)
-	}
-	if _, err := db.Exec(`ALTER TABLE requests DROP COLUMN total_tok_s`); err != nil {
-		_ = db.Close()
-		t.Fatalf("drop total_tok_s: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	outputPath := filepath.Join(t.TempDir(), "report.html")
-	if err := WriteSQLiteHTMLReport(artifactPath, outputPath, HTMLReportOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	html, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(html), "123") {
-		t.Fatalf("older-schema HTML missing aggregate throughput fallback:\n%s", html)
-	}
-}
-
 func TestWriteSQLiteHTMLReportHandlesQueryCharacterPath(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "a?b", "run.sqlite")
 	createTestSQLiteHTMLArtifact(t, artifactPath, "Query Character Path")
@@ -789,19 +754,19 @@ func TestLoadSQLiteReportIgnoresEmptyNotableEventMessages(t *testing.T) {
 func insertAggregateOnlyMeasurement(t *testing.T, db *sql.DB, completed int, ttft, tpot, outputTokS float64) int64 {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
-		save_detailed, capture_payload_artifacts
-	) SELECT 'aggregate-only', run_id, 'aggregate-only', phase, traffic_json, concurrency_json, ?, 1, 0, capture_payload_artifacts
-		FROM workloads ORDER BY id LIMIT 1`, completed); err != nil {
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
+		save_detailed, capture_payload_artifacts, metadata_json
+	) SELECT 'aggregate-only', run_id, 'aggregate-only', role, phase, traffic_json, '[2]', 8, 1, 0, capture_payload_artifacts, metadata_json
+		FROM workloads ORDER BY id LIMIT 1`); err != nil {
 		t.Fatal(err)
 	}
 	result, err := db.Exec(`INSERT INTO measurements (
 		run_id, profile_id, workload_id, repeat_index, concurrency, samples_requested, status,
 		completed_requests, failed_requests, prompt_tokens, completion_tokens, total_tokens,
 		aggregate_output_tok_s, per_user_output_tok_s, aggregate_total_tok_s
-	) SELECT run_id, profile_id, 'aggregate-only', 0, 2, ?, 'completed',
+	) SELECT run_id, profile_id, 'aggregate-only', 0, 2, 8, 'completed',
 		?, 0, 300, 30, 330, ?, ? / 2.0, ? + 100.0
-		FROM measurements ORDER BY id LIMIT 1`, completed, completed, outputTokS, outputTokS, outputTokS)
+		FROM measurements ORDER BY id LIMIT 1`, completed, outputTokS, outputTokS, outputTokS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -883,12 +848,13 @@ func createTestSQLiteHTMLArtifact(t *testing.T, artifactPath, name string) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
-		save_detailed, capture_payload_artifacts, dataset_json, request_json, load_json, metadata_json
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
+		save_detailed, capture_payload_artifacts, dataset_json, request_json, metadata_json
 	) VALUES (
-		'workload-1', ?, 'prefill-8k', 'prefill',
+		'workload-1', ?, 'prefill-8k', 'benchmark', 'prefill',
 		'{"backend":"openai-chat","dataset_name":"random","random_input_len":8192,"random_output_len":16,"request_rate":"inf"}',
-		'[4,8]', 8, 1, 1, 0, '{}', '{}', '{}', '{}'
+		'[4,8]', 16, 1, 1, 0, '{}', '{}',
+		'{"context":{"target":8192,"semantics":"capacity"}}'
 	)`, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -1056,7 +1022,7 @@ func TestGeneratedSpecTrimsRenderAsRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE specs SET content = ? WHERE kind = 'original'`, string(content)); err != nil {
+	if _, err := db.Exec(`UPDATE specs SET content = ?, sha256 = ? WHERE kind = 'original'`, string(content), artifact.SHA256Hex(content)); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

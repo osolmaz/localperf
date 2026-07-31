@@ -86,7 +86,7 @@ Validation rules, enforced as hard errors at spec load:
    a capacity/concurrency data point, never a context-scaling data point.
 3. `context_target` without `context_semantics` (or the reverse) is invalid.
 4. Both fields are required on every workload. A spec without them is
-   refused; there is no legacy path.
+   refused.
 
 The error message for rule 1 must explain the distinction, because spec
 authors (human or agent) correct themselves from it, for example:

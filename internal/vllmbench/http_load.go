@@ -144,7 +144,7 @@ type numericStats struct {
 }
 
 func executeHTTPBench(ctx context.Context, spec Spec, planned PlannedRun, logPath string) (commandResult, error) {
-	if err := prepareCommandPaths(HTTPCommand(spec, planned), logPath); err != nil {
+	if err := prepareCommandPaths(httpCommand(spec, planned), logPath); err != nil {
 		return commandResult{ExitCode: -1}, err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(spec.Safety.WorkloadTimeoutSec)*time.Second)
@@ -221,13 +221,6 @@ func httpRunError(runCtx context.Context, spec Spec, runErr, memoryErr error, re
 		return fmt.Errorf("localperf_http result reported %d failed request(s)", result.Failed)
 	}
 	return nil
-}
-
-func RunHTTPBench(ctx context.Context, spec Spec, planned PlannedRun, logPath string) error {
-	if _, err := executeHTTPBench(ctx, spec, planned, logPath); err != nil {
-		return err
-	}
-	return validateParsedResult(planned.ResultFile, "localperf_http")
 }
 
 func runHTTPBenchmark(ctx context.Context, planned PlannedRun) (*HTTPBenchmarkResult, error) {

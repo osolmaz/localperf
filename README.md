@@ -36,10 +36,6 @@ appears below.
   source.
 - `sqlite3` if you want to inspect artifacts from the shell.
 
-The included DiffusionGemma example targets
-`nvidia/diffusiongemma-26B-A4B-it-NVFP4` on a GB10/DGX Spark-class local
-machine. Edit the spec before using it on a different machine or model.
-
 ## Quick Start
 
 Generate the default context/concurrency sweep spec instead of hand-writing
@@ -63,9 +59,9 @@ Run one dry benchmark case and validate the artifact:
 ```sh
 localperf bench run \
   --dry-run \
-  --spec examples/diffusiongemma-vllm-standard/spec.json \
+  --spec spec.json \
   --profile 4k-reference \
-  --workload claim-repro-1k-out1024 \
+  --workload max-throughput-reference \
   --concurrency 1 \
   --run-dir /tmp/localperf-onecase-dry
 
@@ -134,8 +130,28 @@ target, on the random dataset, with a fixed range ratio. `"capacity"` marks a
 server-limit/concurrency point and must match the profile's `max_model_len`.
 Specs that conflate the two are refused before any GPU time is spent, and the
 report labels rows only by declared-and-measured active context or by the
-measured token shape — never by `max_model_len` alone. See
+measured token shape, never by `max_model_len` alone. See
 [Context Semantics](docs/2026-07-02-context-semantics.md) for the contract.
+
+Every workload also declares its role:
+
+```json
+"role": "benchmark"
+```
+
+A benchmark point must request at least `max(8, 2 * concurrency)` prompts.
+Use `"diagnostic"` for smaller probes. Diagnostic evidence stays in the
+SQLite artifact but is excluded from benchmark reports and comparisons. Only
+validated SQLite artifacts written by `localperf bench run` are reportable;
+raw result JSON and run directories are not accepted report inputs.
+
+These checks apply to every workload, whether a spec was generated or written
+by hand. LocalPerf validates the complete spec on load, after filtering and
+dataset materialization, immediately before execution, and again before
+writing an artifact. It also requires exact request counts, concurrency, token
+totals, and throughput fields from every successful result. Artifact append,
+merge, check, render, and view run full validation and reject schema drift,
+contract violations, broken foreign keys, or mismatched evidence hashes.
 
 Workloads may also declare latency targets for goodput:
 
@@ -187,19 +203,8 @@ available source (`tegrastats`, `nvidia-smi`) and names the source in the
 report. See [Measurement Methods](docs/2026-06-23-measurement-methods.md) for
 the memory reporting policy.
 
-## Example Data
+## Example
 
-The repo includes two useful examples:
-
-- `examples/diffusiongemma-vllm-standard/`: a reusable vLLM benchmark spec plus
-  a completed known-run fixture.
-- `examples/gemma4-vllm-resource-sweep-20260620/`: an earlier Gemma 4 resource
-  sweep with generated tables, plots, and an HTML report.
-
-Open the Gemma 4 report locally:
-
-```sh
-python3 -m http.server 8766 --directory examples/gemma4-vllm-resource-sweep-20260620/reports
-```
-
-Then visit `http://127.0.0.1:8766/`.
+`examples/sharegpt-chat-smoke/spec.json` shows the current strict spec format
+for a small diagnostic chat run. Replace its model and endpoint settings before
+running it.

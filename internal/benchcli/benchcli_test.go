@@ -2,69 +2,26 @@ package benchcli
 
 import (
 	"flag"
-	"path/filepath"
 	"testing"
-	"time"
 )
 
-func TestProfileFromBaseURLPreservesPathPrefix(t *testing.T) {
-	profile, err := profileFromBaseURL("http://127.0.0.1:8000/proxy/", "model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile.EndpointBaseURL != "http://127.0.0.1:8000/proxy" {
-		t.Fatalf("endpoint base URL = %q, want path prefix preserved", profile.EndpointBaseURL)
-	}
-}
-
-func TestProfileFromBaseURLAcceptsHTTPS(t *testing.T) {
-	profile, err := profileFromBaseURL("https://example.test:443/proxy/", "model")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile.EndpointBaseURL != "https://example.test:443/proxy" {
-		t.Fatalf("endpoint base URL = %q, want HTTPS URL preserved", profile.EndpointBaseURL)
-	}
-}
-
-func TestProfileFromBaseURLStripsAPIRootV1(t *testing.T) {
-	cases := map[string]string{
-		"http://127.0.0.1:8000/v1":        "http://127.0.0.1:8000",
-		"http://127.0.0.1:8000/proxy/v1/": "http://127.0.0.1:8000/proxy",
-	}
-	for raw, want := range cases {
-		profile, err := profileFromBaseURL(raw, "model")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if profile.EndpointBaseURL != want {
-			t.Fatalf("endpoint base URL for %q = %q, want %q", raw, profile.EndpointBaseURL, want)
+func TestCommandSurfaceContainsOnlyValidatedWorkflows(t *testing.T) {
+	for name := range rootHandlers {
+		if name != "bench" && name != "artifact" && name != "sweep" && name != "view" {
+			t.Fatalf("unexpected root command %q", name)
 		}
 	}
-}
-
-func TestProfileFromBaseURLUsesDefaultPorts(t *testing.T) {
-	cases := map[string]int{
-		"https://api.example.test/v1": 443,
-		"http://localhost/v1":         80,
+	if len(benchHandlers) != 2 || benchHandlers["plan"] == nil || benchHandlers["run"] == nil {
+		t.Fatalf("bench commands = %v, want plan/run only", benchHandlers)
 	}
-	for raw, wantPort := range cases {
-		profile, err := profileFromBaseURL(raw, "model")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if profile.Port != wantPort {
-			t.Fatalf("profile port for %q = %d, want %d", raw, profile.Port, wantPort)
-		}
+	if _, ok := benchHandlers["http-load"]; ok {
+		t.Fatal("raw HTTP load command is exposed")
 	}
-}
-
-func TestTimeoutSecondsRoundsUp(t *testing.T) {
-	if got := timeoutSeconds(500 * time.Millisecond); got != 1 {
-		t.Fatalf("timeoutSeconds(500ms) = %d, want 1", got)
+	if len(artifactHandlers) != 3 || artifactHandlers["check"] == nil || artifactHandlers["render"] == nil || artifactHandlers["merge"] == nil {
+		t.Fatalf("artifact commands = %v, want check/render/merge only", artifactHandlers)
 	}
-	if got := timeoutSeconds(1500 * time.Millisecond); got != 2 {
-		t.Fatalf("timeoutSeconds(1500ms) = %d, want 2", got)
+	if _, ok := artifactHandlers["rebuild"]; ok {
+		t.Fatal("raw run-directory artifact reconstruction is exposed")
 	}
 }
 
@@ -137,54 +94,5 @@ func TestParseViewFlagsAllowsEqualsValueFlags(t *testing.T) {
 func TestParseViewFlagsRejectsMissingPath(t *testing.T) {
 	if _, err := parseViewFlags([]string{"--addr", "127.0.0.1:0"}, flag.ContinueOnError); err == nil {
 		t.Fatal("parseViewFlags error = nil, want missing path error")
-	}
-}
-
-func TestHTTPLoadWorkloadCarriesConcurrency(t *testing.T) {
-	workload, err := httpLoadWorkload("openai-chat", "random", "inf", "", "", "", "0", true, false, 3, 4, 128, 16)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(workload.MaxConcurrency) != 1 || workload.MaxConcurrency[0] != 4 {
-		t.Fatalf("max concurrency = %v, want [4]", workload.MaxConcurrency)
-	}
-	if workload.Temperature == nil || *workload.Temperature != 0 {
-		t.Fatalf("temperature = %v, want 0", workload.Temperature)
-	}
-	if !workload.IgnoreEOS {
-		t.Fatal("ignore_eos = false, want true")
-	}
-}
-
-func TestHTTPLoadWorkloadCarriesCanonicalDatasetPath(t *testing.T) {
-	workload, err := httpLoadWorkload("openai-chat", "random", "inf", "", "/tmp/canonical.jsonl", `{"top_p":0.95}`, "", false, false, 3, 2, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if workload.DatasetName != "custom" {
-		t.Fatalf("dataset_name = %q, want custom for canonical path", workload.DatasetName)
-	}
-	if workload.DatasetPath != "/tmp/canonical.jsonl" {
-		t.Fatalf("dataset_path = %q, want canonical path", workload.DatasetPath)
-	}
-	if workload.ExtraBody != `{"top_p":0.95}` {
-		t.Fatalf("extra_body = %q, want carried through", workload.ExtraBody)
-	}
-	if workload.Dataset.Prepared.CanonicalPath != "/tmp/canonical.jsonl" || workload.Dataset.Prepared.RequestCount != 3 {
-		t.Fatalf("prepared dataset = %+v, want canonical path and request count", workload.Dataset.Prepared)
-	}
-}
-
-func TestHTTPLoadWorkloadAbsolutizesRelativeDatasetPath(t *testing.T) {
-	workload, err := httpLoadWorkload("openai-chat", "random", "inf", "", "canonical.jsonl", "", "", false, false, 1, 1, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := filepath.Abs("canonical.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if workload.Dataset.Prepared.CanonicalPath != want || workload.DatasetPath != want {
-		t.Fatalf("dataset path = %q prepared = %q, want %q", workload.DatasetPath, workload.Dataset.Prepared.CanonicalPath, want)
 	}
 }

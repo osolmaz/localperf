@@ -21,30 +21,52 @@ const (
 	sqliteFormatVersion = artifact.FormatVersion
 )
 
-// WriteSQLiteArtifact writes the run into the artifact at artifactPath,
+// writeSQLiteArtifact writes the run into the artifact at artifactPath,
 // appending when the artifact already exists so repeated runs of one model
 // accumulate in a single model-level file; see
 // docs/2026-07-02-default-inference-sweep.md. Re-running the same run
 // directory replaces that run's rows instead of duplicating them.
-func WriteSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, plan []PlannedRun, originalSpecPath string) error {
+func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string) error {
 	if strings.TrimSpace(artifactPath) == "" {
 		return nil
 	}
-	info, statErr := os.Stat(artifactPath)
-	createdFresh := statErr != nil || (statErr == nil && info.Size() == 0)
+	ApplyDefaults(&spec)
+	if err := ValidateSpec(spec); err != nil {
+		return fmt.Errorf("refuse artifact write for invalid spec: %w", err)
+	}
+	return persistSQLiteArtifact(runDir, artifactPath, spec, summary, originalSpecPath)
+}
+
+func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string) error {
+	createdFresh := artifactPathIsFresh(artifactPath)
 	db, err := createSQLiteArtifact(artifactPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	writeErr := withSQLiteTx(db, func(tx *sql.Tx) error {
+	plan := BuildPlan(spec, runDir)
+	if err := withSQLiteTx(db, func(tx *sql.Tx) error {
 		return writeSQLiteRun(tx, runDir, spec, summary, plan, originalSpecPath)
-	})
-	if writeErr != nil && createdFresh {
-		// A failed first write must not strand a schema-only file that
-		// later appends would reject.
+	}); err != nil {
+		return cleanupFailedArtifact(db, artifactPath, createdFresh, err)
+	}
+	if err := artifact.Check(artifactPath); err != nil {
+		return cleanupFailedArtifact(db, artifactPath, createdFresh, err)
+	}
+	return nil
+}
+
+func artifactPathIsFresh(path string) bool {
+	info, err := os.Stat(path)
+	return err != nil || info.Size() == 0
+}
+
+func cleanupFailedArtifact(db *sql.DB, path string, createdFresh bool, writeErr error) error {
+	if createdFresh {
+		// A failed first write must not strand a schema-only file that later
+		// appends would reject.
 		_ = db.Close()
-		_ = os.Remove(artifactPath)
+		_ = os.Remove(path)
 	}
 	return writeErr
 }
@@ -127,8 +149,8 @@ func replaceExistingRun(tx *sql.Tx, runID, runDir string) error {
 	if err != nil {
 		return err
 	}
-	// Cutover: no legacy allowance. A run with unknown provenance (no
-	// run_dir label) is a collision too; re-run it under the new format.
+	// A run with unknown provenance (no run_dir label) is also a collision;
+	// rerun it under the current format.
 	if !existingDir.Valid || existingDir.String != absolutePathOrSelf(runDir) {
 		return fmt.Errorf("run id %q already exists in this artifact from a different or unknown run directory; rename the run directory or start a fresh artifact", runID)
 	}
@@ -195,21 +217,21 @@ func insertRunSpecs(tx *sql.Tx, runID, runDir string, spec Spec, originalSpecPat
 	if err := insertSpec(tx, runID, "original", originalData, now); err != nil {
 		return err
 	}
-	return insertSpec(tx, runID, "normalized", normalizedSpecBytes(runDir, specData), now)
-}
-
-func normalizedSpecBytes(runDir string, fallback []byte) []byte {
-	if normalized, err := os.ReadFile(filepath.Join(runDir, "spec.normalized.json")); err == nil {
-		return normalized
+	normalizedData, err := os.ReadFile(filepath.Join(runDir, "spec.normalized.json"))
+	if err != nil {
+		return fmt.Errorf("read normalized spec: %w", err)
 	}
-	return fallback
+	return insertSpec(tx, runID, "normalized", normalizedData, now)
 }
 
 func insertRunData(tx *sql.Tx, runID, runDir string, spec Spec, _ RunSummary, plan []PlannedRun, now time.Time) error {
 	if err := insertRunDimensions(tx, runID, runDir, spec); err != nil {
 		return err
 	}
-	events, _ := readEvents(filepath.Join(runDir, "events.jsonl"))
+	events, err := readEvents(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		return fmt.Errorf("read run events: %w", err)
+	}
 	return insertRunExecutionData(tx, runID, runDir, spec, plan, events, now)
 }
 
@@ -397,14 +419,13 @@ func insertWorkloads(tx *sql.Tx, runID string, spec Spec) error {
 		trafficJSON := mustJSONString(workload.BenchmarkTrafficConfig)
 		concurrencyJSON := mustJSONString(workload.MaxConcurrency)
 		if _, err := tx.Exec(`INSERT INTO workloads (
-			id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
-			save_detailed, capture_payload_artifacts, dataset_json, request_json, load_json, metadata_json
+			id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
+			save_detailed, capture_payload_artifacts, dataset_json, request_json, metadata_json
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			dimensionID(runID, workload.Name), runID, workload.Name, workload.Phase, trafficJSON, concurrencyJSON, workloadSampleCount(workload),
+			dimensionID(runID, workload.Name), runID, workload.Name, workload.Role, workload.Phase, trafficJSON, concurrencyJSON, workloadSampleCount(workload),
 			workload.Repeats, boolToInt(boolValue(workload.BenchmarkTrafficConfig.SaveDetailed)),
 			boolToInt(workload.CapturePayloadArtifacts), structuredWorkloadJSON(workload, workload.Dataset),
-			structuredWorkloadJSON(workload, workload.Request), structuredWorkloadJSON(workload, workload.Load),
-			workloadClaimsJSON(workload)); err != nil {
+			structuredWorkloadJSON(workload, workload.Request), workloadClaimsJSON(workload)); err != nil {
 			return err
 		}
 	}
@@ -771,7 +792,7 @@ func insertMeasurements(tx *sql.Tx, runID, runDir string, plan []PlannedRun, eve
 			planned:     planned,
 			row:         row,
 			phaseID:     phaseIDs[key],
-			rawID:       measurementRawArtifactID(row, events, planned, artifactIDs),
+			rawID:       measurementRawArtifactID(events, planned, artifactIDs),
 			status:      measurementStatus(events, planned),
 			errorText:   measurementError(events, planned),
 			startedAt:   startedAt,
@@ -781,7 +802,7 @@ func insertMeasurements(tx *sql.Tx, runID, runDir string, plan []PlannedRun, eve
 			return nil, err
 		}
 		measurementIDs[key] = id
-		if err := insertMeasurementDetails(tx, runDir, id, row, measurementResultFile(row, events, planned)); err != nil {
+		if err := insertMeasurementDetails(tx, runDir, id, row, measurementResultFile(events, planned)); err != nil {
 			return nil, err
 		}
 	}
@@ -810,7 +831,7 @@ func insertMeasurement(tx *sql.Tx, insert measurementInsert) (int64, error) {
 		metadata_json
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		insert.runID, dimensionID(insert.runID, insert.planned.Profile.Name), dimensionID(insert.runID, insert.planned.Workload.Name), zeroNullInt(insert.phaseID),
-		insert.planned.Repeat, insert.planned.Concurrency, insert.planned.Workload.NumPrompts, insert.status,
+		insert.planned.Repeat, insert.planned.Concurrency, resolvedNumPrompts(insert.planned.Workload, insert.planned.Concurrency), insert.status,
 		timePtrString(insert.startedAt), timePtrString(insert.completedAt), durationMillis(insert.startedAt, insert.completedAt),
 		insert.row.Completed, insert.row.Failed, knownIntNull(insert.row.promptTokensKnown, insert.row.PromptTokens),
 		knownIntNull(insert.row.completionTokensKnown, insert.row.CompletionTokens), knownIntNull(insert.row.totalTokensKnown, insert.row.TotalTokens),
@@ -837,20 +858,14 @@ func measurementMetadataJSON(row ReportRow) any {
 	return string(data)
 }
 
-func measurementRawArtifactID(row ReportRow, events []Event, planned PlannedRun, artifactIDs map[string]int64) int64 {
-	if row.ResultFile != "" {
-		return artifactIDForPath(artifactIDs, row.ResultFile)
-	}
+func measurementRawArtifactID(events []Event, planned PlannedRun, artifactIDs map[string]int64) int64 {
 	if event := artifactFinishEvent(events, planned); event.ResultFile != "" {
 		return artifactIDForPath(artifactIDs, event.ResultFile)
 	}
 	return 0
 }
 
-func measurementResultFile(row ReportRow, events []Event, planned PlannedRun) string {
-	if row.ResultFile != "" {
-		return row.ResultFile
-	}
+func measurementResultFile(events []Event, planned PlannedRun) string {
 	return importableFinishEvent(events, planned).ResultFile
 }
 
@@ -1202,12 +1217,12 @@ func rowsByMeasurement(runDir string, events []Event) map[string]ReportRow {
 		if !eventHasImportableResult(event) {
 			continue
 		}
-		rows, err := ParseResultFile(resolveResultPath(runDir, event.ResultFile))
+		rows, err := parseResultFile(resolveResultPath(runDir, event.ResultFile))
 		if err != nil || len(rows) == 0 {
 			continue
 		}
 		row := rows[0]
-		enrichRowFromEvent(&row, event, nil)
+		enrichRowFromEvent(&row, event)
 		out[eventMeasurementKey(event)] = row
 	}
 	return out

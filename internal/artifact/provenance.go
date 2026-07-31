@@ -8,8 +8,7 @@ import (
 
 // GeneratorStamp is the provenance record `sweep plan` writes into generated
 // specs. ContentHash covers the canonical spec document with the "generator"
-// key removed, so any post-generation edit is detectable; see
-// docs/2026-07-05-report-integrity-plan.md.
+// key removed, so any post-generation edit is detectable.
 type GeneratorStamp struct {
 	Tool        string          `json:"tool"`
 	Version     string          `json:"version"`

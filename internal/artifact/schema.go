@@ -73,6 +73,7 @@ CREATE TABLE workloads (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('benchmark', 'diagnostic')),
   phase TEXT NOT NULL DEFAULT 'mixed',
   traffic_json TEXT NOT NULL CHECK (json_valid(traffic_json)),
   concurrency_json TEXT NOT NULL CHECK (json_valid(concurrency_json)),
@@ -82,7 +83,6 @@ CREATE TABLE workloads (
   capture_payload_artifacts INTEGER NOT NULL DEFAULT 0 CHECK (capture_payload_artifacts IN (0, 1)),
   dataset_json TEXT CHECK (dataset_json IS NULL OR json_valid(dataset_json)),
   request_json TEXT CHECK (request_json IS NULL OR json_valid(request_json)),
-  load_json TEXT CHECK (load_json IS NULL OR json_valid(load_json)),
   metadata_json TEXT CHECK (metadata_json IS NULL OR json_valid(metadata_json)),
   UNIQUE (run_id, name)
 );

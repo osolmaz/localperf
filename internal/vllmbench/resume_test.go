@@ -199,6 +199,35 @@ func TestResultMatchesShape(t *testing.T) {
 	}
 }
 
+func TestValidateResultPointRequiresExactCanonicalEvidence(t *testing.T) {
+	valid := ReportRow{
+		Completed:               8,
+		Concurrency:             4,
+		promptTokensKnown:       true,
+		completionTokensKnown:   true,
+		totalTokensKnown:        true,
+		outputTokensPerSecKnown: true,
+		totalTokensPerSecKnown:  true,
+	}
+	if err := validateResultPoint(valid, "workload", 8, 4); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*ReportRow){
+		"request count":     func(row *ReportRow) { row.Completed = 7 },
+		"concurrency":       func(row *ReportRow) { row.Concurrency = 2 },
+		"token totals":      func(row *ReportRow) { row.totalTokensKnown = false },
+		"throughput fields": func(row *ReportRow) { row.outputTokensPerSecKnown = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			row := valid
+			mutate(&row)
+			if err := validateResultPoint(row, "workload", 8, 4); err == nil {
+				t.Fatal("invalid result point was accepted")
+			}
+		})
+	}
+}
+
 func TestResumableRowRejectsMismatches(t *testing.T) {
 	dir := t.TempDir()
 	writeResult := func(name, content string) string {
@@ -218,24 +247,24 @@ func TestResumableRowRejectsMismatches(t *testing.T) {
 		},
 		Concurrency: 2,
 	}
-	complete := `{"completed": 3, "failed": 0, "max_concurrency": 2, "total_input_tokens": 192, "total_output_tokens": 24, "duration": 1}`
+	complete := `{"completed":3,"failed":0,"max_concurrency":2,"total_input_tokens":192,"total_output_tokens":24,"total_tokens":216,"duration":1,"output_throughput":24,"total_token_throughput":216}`
 	planned.ResultFile = writeResult("ok.json", complete)
 	if _, ok := resumableRow(planned); !ok {
 		t.Fatal("complete matching result not resumable")
 	}
-	planned.ResultFile = writeResult("partial.json", `{"completed": 1, "failed": 0, "max_concurrency": 2, "total_input_tokens": 64, "total_output_tokens": 8, "duration": 1}`)
+	planned.ResultFile = writeResult("partial.json", `{"completed":1,"failed":0,"max_concurrency":2,"total_input_tokens":64,"total_output_tokens":8,"total_tokens":72,"duration":1,"output_throughput":8,"total_token_throughput":72}`)
 	if _, ok := resumableRow(planned); ok {
 		t.Fatal("partial result adopted")
 	}
-	planned.ResultFile = writeResult("failed.json", `{"completed": 3, "failed": 1, "max_concurrency": 2, "total_input_tokens": 192, "total_output_tokens": 24, "duration": 1}`)
+	planned.ResultFile = writeResult("failed.json", `{"completed":3,"failed":1,"max_concurrency":2,"total_input_tokens":192,"total_output_tokens":24,"total_tokens":216,"duration":1,"output_throughput":24,"total_token_throughput":216}`)
 	if _, ok := resumableRow(planned); ok {
 		t.Fatal("failed result adopted")
 	}
-	planned.ResultFile = writeResult("other-conc.json", `{"completed": 3, "failed": 0, "max_concurrency": 4, "total_input_tokens": 192, "total_output_tokens": 24, "duration": 1}`)
+	planned.ResultFile = writeResult("other-conc.json", `{"completed":3,"failed":0,"max_concurrency":4,"total_input_tokens":192,"total_output_tokens":24,"total_tokens":216,"duration":1,"output_throughput":24,"total_token_throughput":216}`)
 	if _, ok := resumableRow(planned); ok {
 		t.Fatal("different-concurrency result adopted")
 	}
-	planned.ResultFile = writeResult("other-shape.json", `{"completed": 3, "failed": 0, "max_concurrency": 2, "total_input_tokens": 9000, "total_output_tokens": 24, "duration": 1}`)
+	planned.ResultFile = writeResult("other-shape.json", `{"completed":3,"failed":0,"max_concurrency":2,"total_input_tokens":9000,"total_output_tokens":24,"total_tokens":9024,"duration":1,"output_throughput":24,"total_token_throughput":9024}`)
 	if _, ok := resumableRow(planned); ok {
 		t.Fatal("different-shape result adopted")
 	}

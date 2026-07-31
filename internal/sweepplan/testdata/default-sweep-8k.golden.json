@@ -12,8 +12,6 @@
     }
   ],
   "runner": {
-    "vllm_command": "vllm",
-    "vllm_bench_command": "vllm",
     "one_awake_profile": true,
     "stop_managed_on_exit": true,
     "append_timestamp_to_run": true,
@@ -51,7 +49,6 @@
       "port": 8100,
       "managed": true,
       "health_path": "/v1/models",
-      "serve": {},
       "max_model_len": 4096,
       "max_num_seqs": 4
     },
@@ -63,7 +60,6 @@
       "port": 8101,
       "managed": true,
       "health_path": "/v1/models",
-      "serve": {},
       "max_model_len": 8192,
       "max_num_seqs": 4
     }
@@ -79,6 +75,7 @@
       "random_output_len": 1024,
       "random_range_ratio": "0",
       "name": "max-throughput-reference",
+      "role": "benchmark",
       "phase": "decode",
       "context_target": 4096,
       "context_semantics": "capacity",
@@ -87,7 +84,6 @@
         "prepared": {}
       },
       "request": {},
-      "load": {},
       "profiles": [
         "4k-reference"
       ],
@@ -98,7 +94,6 @@
         1,
         4
       ],
-      "traffic": {},
       "ignore_eos": true,
       "temperature": 0
     },
@@ -112,6 +107,7 @@
       "random_output_len": 1,
       "random_range_ratio": "0",
       "name": "prefill-8k",
+      "role": "benchmark",
       "phase": "prefill",
       "context_target": 8192,
       "context_semantics": "active",
@@ -120,7 +116,6 @@
         "prepared": {}
       },
       "request": {},
-      "load": {},
       "profiles": [
         "8k"
       ],
@@ -131,7 +126,6 @@
         1,
         4
       ],
-      "traffic": {},
       "ignore_eos": true,
       "temperature": 0
     },
@@ -145,6 +139,7 @@
       "random_output_len": 1024,
       "random_range_ratio": "0",
       "name": "decode-8k",
+      "role": "benchmark",
       "phase": "decode",
       "context_target": 8192,
       "context_semantics": "active",
@@ -153,7 +148,6 @@
         "prepared": {}
       },
       "request": {},
-      "load": {},
       "profiles": [
         "8k"
       ],
@@ -164,7 +158,6 @@
         1,
         4
       ],
-      "traffic": {},
       "ignore_eos": true,
       "temperature": 0
     }
@@ -186,6 +179,6 @@
       "min_mem_available_gib": 40,
       "base_port": 8100
     },
-    "content_hash": "4f4964d8f7673921cc1f398579f70cf856e0adca8487cb2516926ea6ef410cac"
+    "content_hash": "7c2fa6475885fd95ba13fd333a19e4db089c959ccd36363ff784c3a1998c5f6c"
   }
 }

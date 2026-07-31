@@ -15,24 +15,16 @@ import (
 	"time"
 )
 
-func TestEngineForProfileFallbacks(t *testing.T) {
-	spec := Spec{
-		Runner: RunnerConfig{VLLMCommand: "serve-cmd", VLLMBenchCommand: "bench-cmd"},
-		Engines: []EngineConfig{
-			{Name: "first", Type: "custom", Command: "first-cmd"},
-			{Name: "second", Type: "custom", Command: "second-cmd"},
-		},
-	}
+func TestEngineForProfileRequiresExactMatch(t *testing.T) {
+	spec := Spec{Engines: []EngineConfig{
+		{Name: "first", Type: "custom", Command: "first-cmd"},
+		{Name: "second", Type: "custom", Command: "second-cmd"},
+	}}
 	if got := EngineForProfile(spec, Profile{Engine: "second"}).Command; got != "second-cmd" {
 		t.Fatalf("matched engine command = %s", got)
 	}
-	if got := EngineForProfile(spec, Profile{Engine: "missing"}).Name; got != "first" {
-		t.Fatalf("fallback engine = %s", got)
-	}
-	spec.Engines = nil
-	engine := EngineForProfile(spec, Profile{})
-	if engine.Name != "vllm" || engine.Command != "serve-cmd" || engine.BenchCommand != "bench-cmd" {
-		t.Fatalf("default engine = %+v", engine)
+	if got := EngineForProfile(spec, Profile{Engine: "missing"}); !reflect.DeepEqual(got, EngineConfig{}) {
+		t.Fatalf("missing engine = %+v, want zero value", got)
 	}
 }
 

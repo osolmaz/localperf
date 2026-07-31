@@ -241,22 +241,22 @@ func createViewerArtifactRows(t *testing.T, db *sql.DB, name string) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
-		save_detailed, capture_payload_artifacts, dataset_json, request_json, load_json, metadata_json
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
+		save_detailed, capture_payload_artifacts, dataset_json, request_json, metadata_json
 	) VALUES (
-		'decode-workload', ?, 'decode-8k', 'decode',
+		'decode-workload', ?, 'decode-8k', 'benchmark', 'decode',
 		'{"backend":"openai-chat","dataset_name":"random","random_input_len":8192,"random_output_len":512,"request_rate":"inf"}',
-		'[4]', 4, 1, 1, 0, '{}', '{}', '{}', '{"context":{"target":8192,"semantics":"capacity"}}'
+		'[4]', 8, 1, 1, 0, '{}', '{}', '{"context":{"target":8192,"semantics":"capacity"}}'
 	)`, runID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, phase, traffic_json, concurrency_json, samples, repeats,
-		save_detailed, capture_payload_artifacts, dataset_json, request_json, load_json, metadata_json
+		id, run_id, name, role, phase, traffic_json, concurrency_json, samples, repeats,
+		save_detailed, capture_payload_artifacts, dataset_json, request_json, metadata_json
 	) VALUES (
-		'prefill-workload', ?, 'prefill-8k', 'prefill',
+		'prefill-workload', ?, 'prefill-8k', 'benchmark', 'prefill',
 		'{"backend":"openai-chat","dataset_name":"random","random_input_len":8192,"random_output_len":16,"request_rate":"inf"}',
-		'[4]', 4, 1, 1, 0, '{}', '{}', '{}', '{"context":{"target":8192,"semantics":"capacity"}}'
+		'[4]', 8, 1, 1, 0, '{}', '{}', '{"context":{"target":8192,"semantics":"capacity"}}'
 	)`, runID); err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func insertViewerMeasurement(t *testing.T, db *sql.DB, runID, workloadID string,
 		prompt_tokens, completion_tokens, total_tokens, aggregate_output_tok_s,
 		per_user_output_tok_s, aggregate_total_tok_s, metadata_json
 	) VALUES (
-		?, 'profile-1', ?, ?, 0, 4, 4, 'completed', ?, ?, 1000,
+		?, 'profile-1', ?, ?, 0, 4, 8, 'completed', ?, ?, 1000,
 		4, 0, 32768, ?, 32768 + ?, ?, ?, 512.0, '{}'
 )`, runID, workloadID, phaseID, createdAt, createdAt, completionTokens, completionTokens, outputTokS, perUserTokS)
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,75 +21,24 @@ import (
 	"github.com/osolmaz/localperf/internal/vllmbench"
 )
 
-const defaultHTTPLoadMinMemAvailableGiB = 40.0
-
 type commandHandlers map[string]func([]string)
 
 var rootHandlers = commandHandlers{
-	"bench":    VLLMBenchMain,
+	"bench":    BenchMain,
 	"artifact": runArtifact,
 	"sweep":    runSweep,
 	"view":     runView,
 }
 
+var benchHandlers = commandHandlers{
+	"plan": runPlan,
+	"run":  runBench,
+}
+
 var artifactHandlers = commandHandlers{
-	"check":   runArtifactCheck,
-	"render":  runArtifactRender,
-	"merge":   runArtifactMerge,
-	"rebuild": runArtifactRebuild,
-}
-
-// runArtifactRebuild reconstructs a SQLite artifact from a run directory's
-// raw data (events, results, summary.json) — the recovery path when a run
-// finished without an artifact or the artifact was lost.
-func runArtifactRebuild(args []string) {
-	flags := flag.NewFlagSet("artifact rebuild", flag.ExitOnError)
-	runDir := flags.String("run-dir", "", "run directory with events.jsonl, results, and summary.json")
-	into := flags.String("into", "", "SQLite artifact path to rebuild/append; defaults to <run-dir>.sqlite")
-	specPath := flags.String("spec", "", "optional original spec path for provenance; defaults to <run-dir>/spec.normalized.json")
-	_ = flags.Parse(args)
-	if strings.TrimSpace(*runDir) == "" {
-		fmt.Fprintln(os.Stderr, "missing --run-dir")
-		os.Exit(2)
-	}
-	artifactPath := artifact.Path(*runDir, *into)
-	if err := rebuildArtifactFromRunDir(*runDir, artifactPath, *specPath); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	fmt.Printf("artifact: %s\n", artifactPath)
-}
-
-func rebuildArtifactFromRunDir(runDir, artifactPath, originalSpecPath string) error {
-	// Reconstruction always follows the normalized spec the run actually
-	// executed (filters applied); --spec supplies only the original file
-	// for provenance.
-	spec, err := vllmbench.LoadSpec(filepath.Join(runDir, "spec.normalized.json"))
-	if err != nil {
-		return err
-	}
-	summary, err := loadRunSummary(runDir)
-	if err != nil {
-		return err
-	}
-	summary.RunDir = runDir
-	summary.ArtifactPath = artifactPath
-	if strings.TrimSpace(summary.SpecPath) == "" {
-		summary.SpecPath = filepath.Join(runDir, "spec.normalized.json")
-	}
-	return vllmbench.WriteSQLiteArtifact(runDir, artifactPath, spec, summary, vllmbench.BuildPlan(spec, runDir), originalSpecPath)
-}
-
-func loadRunSummary(runDir string) (vllmbench.RunSummary, error) {
-	data, err := os.ReadFile(filepath.Join(runDir, "summary.json"))
-	if err != nil {
-		return vllmbench.RunSummary{}, err
-	}
-	var summary vllmbench.RunSummary
-	if err := json.Unmarshal(data, &summary); err != nil {
-		return vllmbench.RunSummary{}, err
-	}
-	return summary, nil
+	"check":  runArtifactCheck,
+	"render": runArtifactRender,
+	"merge":  runArtifactMerge,
 }
 
 // runArtifactMerge combines run artifacts into one model-level SQLite file;
@@ -293,24 +241,8 @@ func parseIntList(value string) ([]int, error) {
 	return values, nil
 }
 
-func VLLMBenchMain(args []string) {
-	if len(args) < 1 {
-		usage()
-		os.Exit(2)
-	}
-	switch args[0] {
-	case "plan":
-		runPlan(args[1:])
-	case "run":
-		runBench(args[1:])
-	case "http-load":
-		runHTTPLoad(args[1:])
-	case "artifact":
-		runArtifact(args[1:])
-	default:
-		usage()
-		os.Exit(2)
-	}
+func BenchMain(args []string) {
+	dispatchCommand(args, usage, benchHandlers)
 }
 
 func Main(args []string) {
@@ -335,13 +267,16 @@ func runPlan(args []string) {
 	specPath := flags.String("spec", "", "benchmark spec JSON file")
 	runDir := flags.String("run-dir", "", "optional run directory for result path planning")
 	jsonOutput := flags.Bool("json", false, "print JSON instead of text")
-	overrides := addOverrideFlags(flags)
 	filterFlags := addFilterFlags(flags)
 	_ = flags.Parse(args)
 	spec := mustLoadSpec(*specPath, filterFlags.Filter())
-	applyOverrides(&spec, overrides)
 	dir := vllmbench.RunDir(*runDir, spec, time.Now())
 	if err := vllmbench.PrepareDatasets(context.Background(), &spec, dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	vllmbench.ApplyDefaults(&spec)
+	if err := vllmbench.ValidateSpec(spec); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -380,11 +315,9 @@ func runBench(args []string) {
 	resume := flags.Bool("resume", false, "skip planned runs whose result files already completed; requires --run-dir of the previous attempt")
 	dryRun := flags.Bool("dry-run", false, "write planned artifacts without launching vLLM or benchmark commands")
 	timeout := flags.Duration("timeout", 0, "optional overall timeout, for example 2h")
-	overrides := addOverrideFlags(flags)
 	filterFlags := addFilterFlags(flags)
 	_ = flags.Parse(args)
 	spec := mustLoadSpec(*specPath, filterFlags.Filter())
-	applyOverrides(&spec, overrides)
 	fmt.Printf("spec provenance: %s\n", spec.Provenance)
 	ctx := context.Background()
 	cancel := func() {}
@@ -493,59 +426,6 @@ func viewFlagNeedsValue(arg string) bool {
 	default:
 		return false
 	}
-}
-
-func runHTTPLoad(args []string) {
-	flags := flag.NewFlagSet("http-load", flag.ExitOnError)
-	backend := flags.String("backend", "openai-chat", "OpenAI-compatible backend type")
-	baseURL := flags.String("base-url", "", "OpenAI-compatible endpoint base URL")
-	model := flags.String("model", "", "served model name")
-	datasetName := flags.String("dataset-name", "random", "dataset name")
-	numPrompts := flags.Int("num-prompts", 0, "number of prompts")
-	maxConcurrency := flags.Int("max-concurrency", 1, "maximum concurrent requests")
-	requestRate := flags.String("request-rate", "inf", "request rate")
-	resultFilename := flags.String("result-filename", "", "result JSON path")
-	datasetPath := flags.String("dataset-path", "", "canonical request JSONL path for structured datasets")
-	randomInputLen := flags.Int("random-input-len", 0, "random dataset input tokens")
-	randomOutputLen := flags.Int("random-output-len", 0, "random dataset output tokens")
-	endpoint := flags.String("endpoint", "", "endpoint path")
-	extraBody := flags.String("extra-body", "", "extra OpenAI request body JSON object")
-	ignoreEOS := flags.Bool("ignore-eos", false, "ask the engine to ignore EOS")
-	temperature := flags.String("temperature", "", "temperature")
-	noStream := flags.Bool("no-stream", false, "disable SSE streaming; the run then records no TTFT")
-	timeout := flags.Duration("timeout", 0, "optional timeout")
-	minMemAvailableGiB := flags.Float64("min-mem-available-gib", defaultHTTPLoadMinMemAvailableGiB, "memory floor")
-	logPath := flags.String("log", "", "log path")
-	_ = flags.Parse(args)
-	profile, err := profileFromBaseURL(*baseURL, *model)
-	exitOnError(err)
-	if *minMemAvailableGiB <= 0 {
-		exitOnError(fmt.Errorf("--min-mem-available-gib must be positive"))
-	}
-	workload, err := httpLoadWorkload(*backend, *datasetName, *requestRate, *endpoint, *datasetPath, *extraBody, *temperature, *ignoreEOS, *noStream, *numPrompts, *maxConcurrency, *randomInputLen, *randomOutputLen)
-	exitOnError(err)
-	if strings.TrimSpace(*resultFilename) == "" {
-		exitOnError(fmt.Errorf("missing --result-filename"))
-	}
-	spec := vllmbench.Spec{Model: *model, Safety: vllmbench.SafetyConfig{MinMemAvailableGiB: *minMemAvailableGiB}}
-	vllmbench.ApplyDefaults(&spec)
-	if *timeout > 0 {
-		spec.Safety.WorkloadTimeoutSec = timeoutSeconds(*timeout)
-	}
-	planned := vllmbench.PlannedRun{Profile: profile, Workload: workload, Concurrency: *maxConcurrency, ResultFile: *resultFilename}
-	if strings.TrimSpace(*logPath) == "" {
-		*logPath = strings.TrimSuffix(*resultFilename, filepath.Ext(*resultFilename)) + ".log"
-	}
-	if err := vllmbench.RunHTTPBench(context.Background(), spec, planned, *logPath); err != nil {
-		exitOnError(err)
-	}
-	rows, err := vllmbench.ParseResultFile(*resultFilename)
-	exitOnError(err)
-	if len(rows) == 0 {
-		exitOnError(fmt.Errorf("no result rows"))
-	}
-	row := rows[0]
-	fmt.Printf("completed: %d failed: %d output_tok_s: %.3f request_output_tok_s_stddev: %.3f\n", row.Completed, row.Failed, row.OutputTokensPerSec, row.OutputTokSecStdDev)
 }
 
 func runArtifact(args []string) {
@@ -663,152 +543,6 @@ func artifactRenderFlagNeedsValue(arg string) bool {
 	}
 }
 
-func profileFromBaseURL(rawURL, model string) (vllmbench.Profile, error) {
-	if strings.TrimSpace(rawURL) == "" {
-		return vllmbench.Profile{}, fmt.Errorf("missing --base-url")
-	}
-	if strings.TrimSpace(model) == "" {
-		return vllmbench.Profile{}, fmt.Errorf("missing --model")
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return vllmbench.Profile{}, err
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return vllmbench.Profile{}, fmt.Errorf("only http and https base URLs are supported")
-	}
-	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return vllmbench.Profile{}, fmt.Errorf("base URL must not include query or fragment")
-	}
-	host := parsed.Hostname()
-	if host == "" {
-		return vllmbench.Profile{}, fmt.Errorf("base URL must include host")
-	}
-	port, err := parsedBaseURLPort(parsed)
-	if err != nil {
-		return vllmbench.Profile{}, err
-	}
-	return vllmbench.Profile{Name: "http-load", Host: host, Port: port, Model: model, EndpointBaseURL: normalizedBaseURL(parsed)}, nil
-}
-
-func parsedBaseURLPort(parsed *url.URL) (int, error) {
-	if portString := parsed.Port(); portString != "" {
-		return strconv.Atoi(portString)
-	}
-	if parsed.Scheme == "https" {
-		return 443, nil
-	}
-	return 80, nil
-}
-
-func normalizedBaseURL(parsed *url.URL) string {
-	return vllmbench.NormalizeEndpointBaseURL(parsed.Scheme + "://" + parsed.Host + parsed.EscapedPath())
-}
-
-func timeoutSeconds(timeout time.Duration) int {
-	seconds := int(timeout / time.Second)
-	if timeout%time.Second != 0 {
-		seconds++
-	}
-	if seconds < 1 {
-		return 1
-	}
-	return seconds
-}
-
-func httpLoadWorkload(backend, datasetName, requestRate, endpoint, datasetPath, extraBody, temperature string, ignoreEOS, noStream bool, numPrompts, maxConcurrency, randomInputLen, randomOutputLen int) (vllmbench.Workload, error) {
-	if numPrompts <= 0 {
-		return vllmbench.Workload{}, fmt.Errorf("--num-prompts must be positive")
-	}
-	if maxConcurrency <= 0 {
-		return vllmbench.Workload{}, fmt.Errorf("--max-concurrency must be positive")
-	}
-	datasetPath, err := absoluteDatasetPath(datasetPath)
-	if err != nil {
-		return vllmbench.Workload{}, err
-	}
-	if strings.TrimSpace(datasetPath) != "" && strings.TrimSpace(datasetName) == "random" {
-		datasetName = "custom"
-	}
-	var temp *float64
-	if strings.TrimSpace(temperature) != "" {
-		parsed, err := strconv.ParseFloat(temperature, 64)
-		if err != nil {
-			return vllmbench.Workload{}, err
-		}
-		temp = &parsed
-	}
-	// This synthetic single-workload spec exists only to validate the exec
-	// boundary of `bench http-load`; it is never persisted to an artifact.
-	// The real context claim lives in the parent spec that planned the run,
-	// so declare the only thing knowable here: for random traffic the active
-	// context is exactly the requested shape; otherwise a capacity point
-	// against a profile with no locally declared limit.
-	contextTarget := 1
-	contextSemantics := vllmbench.ContextSemanticsCapacity
-	if datasetName == "random" && randomInputLen+randomOutputLen > 0 {
-		contextTarget = randomInputLen + randomOutputLen
-		contextSemantics = vllmbench.ContextSemanticsActive
-	}
-	workload := vllmbench.Workload{
-		Name:             "http-load",
-		Profiles:         []string{"http-load"},
-		ContextTarget:    contextTarget,
-		ContextSemantics: contextSemantics,
-		LoadGenerator:    vllmbench.LoadGeneratorHTTP,
-		BenchmarkTrafficConfig: vllmbench.BenchmarkTrafficConfig{
-			Backend:         backend,
-			DatasetName:     datasetName,
-			DatasetPath:     datasetPath,
-			RequestRate:     requestRate,
-			Endpoint:        endpoint,
-			ExtraBody:       extraBody,
-			RandomInputLen:  randomInputLen,
-			RandomOutputLen: randomOutputLen,
-		},
-		NumPrompts:     numPrompts,
-		MaxConcurrency: []int{maxConcurrency},
-		Temperature:    temp,
-		IgnoreEOS:      ignoreEOS,
-	}
-	if noStream {
-		stream := false
-		workload.Stream = &stream
-	}
-	if strings.TrimSpace(datasetPath) != "" {
-		workload.Dataset.Prepared = vllmbench.DatasetMaterialization{
-			CanonicalPath: datasetPath,
-			RequestCount:  numPrompts,
-		}
-	}
-	spec := vllmbench.Spec{
-		Name:     "http-load",
-		Model:    "model",
-		Safety:   vllmbench.SafetyConfig{MinMemAvailableGiB: defaultHTTPLoadMinMemAvailableGiB},
-		Profiles: []vllmbench.Profile{{Name: "http-load", Model: "model", Port: 1}},
-		Workloads: []vllmbench.Workload{
-			workload,
-		},
-	}
-	vllmbench.ApplyDefaults(&spec)
-	if err := vllmbench.ValidateSpec(spec); err != nil {
-		return vllmbench.Workload{}, err
-	}
-	return spec.Workloads[0], nil
-}
-
-func absoluteDatasetPath(path string) (string, error) {
-	path = strings.TrimSpace(path)
-	if path == "" || filepath.IsAbs(path) {
-		return path, nil
-	}
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	return absolute, nil
-}
-
 func mustLoadSpec(path string, filter vllmbench.Filter) vllmbench.Spec {
 	if strings.TrimSpace(path) == "" {
 		fmt.Fprintln(os.Stderr, "missing --spec")
@@ -828,70 +562,19 @@ func mustLoadSpec(path string, filter vllmbench.Filter) vllmbench.Spec {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  localperf-vllm-bench plan   --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload prefill-8k-out16-fixed] [--concurrency 4] [--vllm-command /path/to/vllm] [--json]
-  localperf-vllm-bench run    --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload prefill-8k-out16-fixed] [--concurrency 4] [--vllm-command /path/to/vllm] [--dry-run] [--timeout 2h]
-  localperf-vllm-bench http-load --base-url http://127.0.0.1:8000 --model model --dataset-name random --random-input-len 1024 --random-output-len 128 --num-prompts 8 --max-concurrency 4 --result-filename result.json [--dataset-path canonical.jsonl] [--extra-body '{"guided_decoding_backend":"outlines"}']
-  localperf-vllm-bench artifact check runs/example.sqlite
-  localperf-vllm-bench artifact render runs/example.sqlite [--output runs/example.html] [--store]`)
+  localperf bench plan --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--json]
+  localperf bench run  --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--dry-run] [--timeout 2h]`)
 }
 
 func usageRoot() {
 	fmt.Fprintln(os.Stderr, `usage:
-  localperf bench plan   --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload prefill-8k-out16-fixed] [--concurrency 4] [--vllm-command /path/to/vllm] [--json]
-  localperf bench run    --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload prefill-8k-out16-fixed] [--concurrency 4] [--vllm-command /path/to/vllm] [--dry-run] [--timeout 2h]
-  localperf bench http-load --base-url http://127.0.0.1:8000 --model model --dataset-name random --random-input-len 1024 --random-output-len 128 --num-prompts 8 --max-concurrency 4 --result-filename result.json [--dataset-path canonical.jsonl] [--extra-body '{"guided_decoding_backend":"outlines"}']
+  localperf bench plan   --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--json]
+  localperf bench run    --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--dry-run] [--timeout 2h]
   localperf artifact check runs/example.sqlite
   localperf artifact render runs/example.sqlite [--output runs/example.html] [--store]
   localperf artifact merge --into runs/models/model.sqlite src1.sqlite [src2.sqlite ...]
-  localperf artifact rebuild --run-dir runs/example [--into runs/example.sqlite] [--spec spec.json]
   localperf sweep plan   --model model-id [--contexts 4k,8k,16k,32k,64k] [--concurrency 1,4,8,16,32] [--repeats 1] [--reference] [--stress] [--vllm-command /path/to/vllm] [--gpu-memory-utilization 0.4] [--kv-cache-memory-bytes N] [--trim 64k=8:'reason'] [--out spec.json]
   localperf view runs/model.sqlite [runs/other.sqlite ...] [--addr 127.0.0.1:0] [--open]`)
-}
-
-func addOverrideFlags(flags *flag.FlagSet) *overrideFlags {
-	out := &overrideFlags{}
-	flags.StringVar(&out.vllmCommand, "vllm-command", "", "override vllm serve executable")
-	flags.StringVar(&out.vllmBenchCommand, "vllm-bench-command", "", "override vllm bench executable; defaults to --vllm-command when set")
-	flags.Float64Var(&out.minMemAvailableGiB, "min-mem-available-gib", 0, "override safety.min_mem_available_gib")
-	return out
-}
-
-type overrideFlags struct {
-	vllmCommand        string
-	vllmBenchCommand   string
-	minMemAvailableGiB float64
-}
-
-func applyOverrides(spec *vllmbench.Spec, overrides *overrideFlags) {
-	if overrides == nil {
-		return
-	}
-	if strings.TrimSpace(overrides.vllmCommand) != "" {
-		spec.Runner.VLLMCommand = overrides.vllmCommand
-		if strings.TrimSpace(overrides.vllmBenchCommand) == "" {
-			spec.Runner.VLLMBenchCommand = overrides.vllmCommand
-		}
-	}
-	if strings.TrimSpace(overrides.vllmBenchCommand) != "" {
-		spec.Runner.VLLMBenchCommand = overrides.vllmBenchCommand
-	}
-	for i := range spec.Engines {
-		if spec.Engines[i].Type != "vllm-managed" && spec.Engines[i].Type != "vllm-endpoint" {
-			continue
-		}
-		if strings.TrimSpace(overrides.vllmCommand) != "" {
-			spec.Engines[i].Command = overrides.vllmCommand
-			if strings.TrimSpace(overrides.vllmBenchCommand) == "" {
-				spec.Engines[i].BenchCommand = overrides.vllmCommand
-			}
-		}
-		if strings.TrimSpace(overrides.vllmBenchCommand) != "" {
-			spec.Engines[i].BenchCommand = overrides.vllmBenchCommand
-		}
-	}
-	if overrides.minMemAvailableGiB > 0 {
-		spec.Safety.MinMemAvailableGiB = overrides.minMemAvailableGiB
-	}
 }
 
 func exitOnError(err error) {

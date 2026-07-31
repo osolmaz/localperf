@@ -11,24 +11,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/osolmaz/localperf/internal/bench"
 	"github.com/osolmaz/localperf/internal/collections"
 )
-
-type Report struct {
-	RunDir    string      `json:"run_dir"`
-	Generated time.Time   `json:"generated"`
-	Rows      []ReportRow `json:"rows"`
-	Events    EventCounts `json:"events"`
-}
-
-type EventCounts struct {
-	Total          int            `json:"total"`
-	ByType         map[string]int `json:"by_type"`
-	FailedWorkload int            `json:"failed_workload"`
-}
 
 type ReportRow struct {
 	Profile             string  `json:"profile,omitempty"`
@@ -74,74 +60,7 @@ type ReportRow struct {
 	perUserOutputTokSecKnown bool
 }
 
-func BuildReport(runDir string) (Report, error) {
-	report := newReport(runDir)
-	spec, _ := loadNormalizedSpec(filepath.Join(runDir, "spec.normalized.json"))
-	eventRows, err := readEvents(filepath.Join(runDir, "events.jsonl"))
-	if err == nil {
-		addEventRowsToReport(&report, runDir, spec, eventRows)
-	} else {
-		if err := addResultDirectoryRows(&report, runDir); err != nil {
-			return report, err
-		}
-	}
-	sortReportRows(report.Rows)
-	return report, nil
-}
-
-func newReport(runDir string) Report {
-	return Report{
-		RunDir:    runDir,
-		Generated: time.Now().UTC(),
-		Events:    EventCounts{ByType: map[string]int{}},
-	}
-}
-
-func addEventRowsToReport(report *Report, runDir string, spec *Spec, events []Event) {
-	report.Events.Total = len(events)
-	resultEvents := collectResultEvents(report, events)
-	for resultFile, event := range resultEvents {
-		addResultEventRows(report, runDir, spec, resultFile, event)
-	}
-}
-
-func collectResultEvents(report *Report, events []Event) map[string]Event {
-	resultEvents := map[string]Event{}
-	for _, event := range events {
-		report.Events.ByType[event.Type]++
-		if event.Type == "workload_failed" {
-			report.Events.FailedWorkload++
-		}
-		if eventHasImportableResult(event) {
-			resultEvents[event.ResultFile] = event
-		}
-	}
-	return resultEvents
-}
-
-func addResultEventRows(report *Report, runDir string, spec *Spec, resultFile string, event Event) {
-	resultPath := resolveResultPath(runDir, resultFile)
-	rows, err := ParseResultFile(resultPath)
-	if err != nil {
-		return
-	}
-	event.ResultFile = resultPath
-	for _, row := range rows {
-		enrichRowFromEvent(&row, event, spec)
-		report.Rows = append(report.Rows, row)
-	}
-}
-
-func addResultDirectoryRows(report *Report, runDir string) error {
-	rows, err := parseResultDirectory(filepath.Join(runDir, "results"))
-	if err != nil {
-		return err
-	}
-	report.Rows = rows
-	return nil
-}
-
-func ParseResultFile(path string) ([]ReportRow, error) {
+func parseResultFile(path string) ([]ReportRow, error) {
 	data, err := readTrimmedFile(path)
 	if err != nil {
 		return nil, err
@@ -166,64 +85,27 @@ func readTrimmedFile(path string) ([]byte, error) {
 }
 
 func parseResultData(data []byte, path string) ([]ReportRow, error) {
-	switch data[0] {
-	case '[':
-		var raw []map[string]any
-		if err := json.Unmarshal(data, &raw); err != nil {
-			return nil, err
-		}
-		return rowsFromRaw(raw, path), nil
-	case '{':
-		var raw map[string]any
-		if err := json.Unmarshal(data, &raw); err == nil {
-			return rowsFromRaw([]map[string]any{raw}, path), nil
-		}
+	if data[0] != '{' {
+		return nil, fmt.Errorf("%s: result must be one JSON object", path)
 	}
-	return parseJSONLines(data, path)
-}
-
-func parseJSONLines(data []byte, path string) ([]ReportRow, error) {
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	scanner.Buffer(make([]byte, 1024*1024), 64*1024*1024)
-	var raw []map[string]any
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var row map[string]any
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			return nil, err
-		}
-		raw = append(raw, row)
-	}
-	if err := scanner.Err(); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	var raw map[string]any
+	if err := decoder.Decode(&raw); err != nil {
 		return nil, err
 	}
-	return rowsFromRaw(raw, path), nil
-}
-
-func loadNormalizedSpec(path string) (*Spec, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("%s: result must contain exactly one JSON object", path)
+		}
 		return nil, err
 	}
-	var spec Spec
-	if err := json.Unmarshal(data, &spec); err != nil {
-		return nil, err
-	}
-	ApplyDefaults(&spec)
-	return &spec, nil
+	return rowsFromRaw([]map[string]any{raw}, path), nil
 }
 
-func enrichRowFromEvent(row *ReportRow, event Event, spec *Spec) {
-	defer deriveReportRowFields(row)
+func enrichRowFromEvent(row *ReportRow, event Event) {
 	applyEventFields(row, event)
-	if spec == nil {
-		return
-	}
-	enrichRowFromProfile(row, event, spec)
-	enrichRowFromWorkload(row, event, spec)
+	deriveReportRowFields(row)
 }
 
 func applyEventFields(row *ReportRow, event Event) {
@@ -232,27 +114,6 @@ func applyEventFields(row *ReportRow, event Event) {
 	row.Concurrency = event.Concurrency
 	row.Repeat = event.Repeat
 	row.ResultFile = event.ResultFile
-}
-
-func enrichRowFromProfile(row *ReportRow, event Event, spec *Spec) {
-	for _, profile := range spec.Profiles {
-		if profile.Name != event.Profile {
-			continue
-		}
-		row.Context = firstNonZeroInt(row.Context, profile.MaxModelLen)
-		row.ServerMaxNumSeqs = firstNonZeroInt(row.ServerMaxNumSeqs, profile.MaxNumSeqs)
-		break
-	}
-}
-
-func enrichRowFromWorkload(row *ReportRow, event Event, spec *Spec) {
-	for _, workload := range spec.Workloads {
-		if workload.Name != event.Workload {
-			continue
-		}
-		applyWorkloadFields(row, workload)
-		break
-	}
 }
 
 func applyWorkloadFields(row *ReportRow, workload Workload) {
@@ -333,54 +194,39 @@ func rowsFromRaw(rawRows []map[string]any, path string) []ReportRow {
 	rows := make([]ReportRow, 0, len(rawRows))
 	for _, raw := range rawRows {
 		row := ReportRow{
-			Profile:            stringValue(raw, "profile"),
-			Workload:           stringValue(raw, "workload"),
-			Phase:              stringValue(raw, "phase"),
 			DatasetName:        stringValue(raw, "dataset_name"),
-			Context:            intValue(raw, "max_model_len"),
-			ServerMaxNumSeqs:   intValue(raw, "server_max_num_seqs"),
 			Concurrency:        intValue(raw, "max_concurrency"),
-			Repeat:             intValue(raw, "repeat"),
-			InputLen:           firstInt(raw, "input_len", "prompt_len", "random_input_len"),
-			OutputLen:          firstInt(raw, "output_len", "max_tokens", "random_output_len"),
+			InputLen:           intValue(raw, "random_input_len"),
+			OutputLen:          intValue(raw, "random_output_len"),
 			RandomInputLen:     intValue(raw, "random_input_len"),
 			RandomOutputLen:    intValue(raw, "random_output_len"),
-			Completed:          firstInt(raw, "completed", "ok", "successes"),
-			Failed:             firstInt(raw, "failed", "errors"),
-			PromptTokens:       firstInt(raw, "total_input_tokens", "prompt_tokens"),
-			CompletionTokens:   firstInt(raw, "total_output_tokens", "completion_tokens"),
+			Completed:          intValue(raw, "completed"),
+			Failed:             intValue(raw, "failed"),
+			PromptTokens:       intValue(raw, "total_input_tokens"),
+			CompletionTokens:   intValue(raw, "total_output_tokens"),
 			TotalTokens:        intValue(raw, "total_tokens"),
-			DurationSeconds:    firstFloat(raw, "duration", "wall_seconds"),
-			OutputTokensPerSec: firstFloat(raw, "output_throughput", "aggregate_completion_tokens_per_second", "completion_tokens_per_second", "diffusion_committed_throughput"),
-			TotalTokensPerSec:  firstFloat(raw, "total_token_throughput", "aggregate_total_tokens_per_second", "total_tokens_per_second"),
-			OutputTokSecStdDev: firstFloat(raw, "request_output_throughput_stddev", "output_tokens_per_second_stddev"),
-			TotalTokSecStdDev:  firstFloat(raw, "request_total_throughput_stddev", "total_tokens_per_second_stddev"),
-			MeanTTFTMillis:     firstFloat(raw, "mean_ttft_ms"),
-			P50TTFTMillis:      firstFloat(raw, "p50_ttft_ms"),
-			P95TTFTMillis:      firstFloat(raw, "p95_ttft_ms"),
-			P99TTFTMillis:      firstFloat(raw, "p99_ttft_ms"),
+			DurationSeconds:    floatValue(raw, "duration"),
+			OutputTokensPerSec: floatValue(raw, "output_throughput"),
+			TotalTokensPerSec:  floatValue(raw, "total_token_throughput"),
+			OutputTokSecStdDev: floatValue(raw, "request_output_throughput_stddev"),
+			TotalTokSecStdDev:  floatValue(raw, "request_total_throughput_stddev"),
+			MeanTTFTMillis:     floatValue(raw, "mean_ttft_ms"),
+			P50TTFTMillis:      floatValue(raw, "p50_ttft_ms"),
+			P95TTFTMillis:      floatValue(raw, "p95_ttft_ms"),
+			P99TTFTMillis:      floatValue(raw, "p99_ttft_ms"),
 			TTFTSource:         stringValue(raw, "ttft_source"),
-			MeanTPOTMillis:     firstFloat(raw, "mean_tpot_ms"),
-			MeanLatencyMillis:  firstFloat(raw, "mean_latency_ms"),
-			StdLatencyMillis:   firstFloat(raw, "std_latency_ms"),
-			P95LatencyMillis:   firstFloat(raw, "p95_latency_ms"),
-			P99LatencyMillis:   firstFloat(raw, "p99_latency_ms"),
+			MeanTPOTMillis:     floatValue(raw, "mean_tpot_ms"),
+			MeanLatencyMillis:  floatValue(raw, "mean_latency_ms"),
+			StdLatencyMillis:   floatValue(raw, "std_latency_ms"),
+			P95LatencyMillis:   floatValue(raw, "p95_latency_ms"),
+			P99LatencyMillis:   floatValue(raw, "p99_latency_ms"),
 			ResultFile:         path,
 
-			promptTokensKnown:       hasAnyKey(raw, "total_input_tokens", "prompt_tokens"),
-			completionTokensKnown:   hasAnyKey(raw, "total_output_tokens", "completion_tokens"),
+			promptTokensKnown:       hasAnyKey(raw, "total_input_tokens"),
+			completionTokensKnown:   hasAnyKey(raw, "total_output_tokens"),
 			totalTokensKnown:        hasAnyKey(raw, "total_tokens"),
-			outputTokensPerSecKnown: hasAnyKey(raw, "output_throughput", "aggregate_completion_tokens_per_second", "completion_tokens_per_second", "diffusion_committed_throughput"),
-			totalTokensPerSecKnown:  hasAnyKey(raw, "total_token_throughput", "aggregate_total_tokens_per_second", "total_tokens_per_second"),
-		}
-		if row.Context == 0 {
-			row.Context = intValue(raw, "context")
-		}
-		if row.Concurrency == 0 {
-			row.Concurrency = intValue(raw, "concurrency")
-		}
-		if row.DatasetName == "" {
-			row.DatasetName = stringValue(raw, "dataset")
+			outputTokensPerSecKnown: hasAnyKey(raw, "output_throughput"),
+			totalTokensPerSecKnown:  hasAnyKey(raw, "total_token_throughput"),
 		}
 		deriveReportRowFields(&row)
 		rows = append(rows, row)
@@ -466,30 +312,6 @@ func intPointerValue(value *int) int {
 	return *value
 }
 
-func parseResultDirectory(dir string) ([]ReportRow, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var rows []ReportRow
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".jsonl") {
-			continue
-		}
-		parsed, err := ParseResultFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		rows = append(rows, parsed...)
-	}
-	sortReportRows(rows)
-	return rows, nil
-}
-
 func readEvents(path string) ([]Event, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -553,20 +375,6 @@ func stringValue(row map[string]any, key string) string {
 	}
 }
 
-func firstInt(row map[string]any, keys ...string) int {
-	return firstByKey(keys, func(key string) int { return intValue(row, key) })
-}
-
-func firstByKey[T comparable](keys []string, lookup func(string) T) T {
-	var zero T
-	for _, key := range keys {
-		if value := lookup(key); value != zero {
-			return value
-		}
-	}
-	return zero
-}
-
 func hasAnyKey(row map[string]any, keys ...string) bool {
 	for _, key := range keys {
 		if _, ok := row[key]; ok {
@@ -594,10 +402,6 @@ func intValue(row map[string]any, key string) int {
 	default:
 		return 0
 	}
-}
-
-func firstFloat(row map[string]any, keys ...string) float64 {
-	return firstByKey(keys, func(key string) float64 { return floatValue(row, key) })
 }
 
 func floatValue(row map[string]any, key string) float64 {

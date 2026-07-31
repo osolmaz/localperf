@@ -18,7 +18,7 @@ type CommandSpec struct {
 
 func ServeCommand(spec Spec, profile Profile) CommandSpec {
 	engine := EngineForProfile(spec, profile)
-	command := engineCommand(spec, engine)
+	command := engineCommand(engine)
 	args := []string{
 		command,
 		"serve",
@@ -69,7 +69,7 @@ func BenchCommand(spec Spec, run PlannedRun) CommandSpec {
 	workload := run.Workload
 	profile := run.Profile
 	engine := EngineForProfile(spec, profile)
-	command := engineBenchCommand(spec, engine)
+	command := engineBenchCommand(engine)
 	args := []string{
 		command,
 		"bench", "serve",
@@ -102,14 +102,14 @@ func BenchCommand(spec Spec, run PlannedRun) CommandSpec {
 
 func LoadCommand(spec Spec, run PlannedRun) CommandSpec {
 	if run.Workload.LoadGenerator == LoadGeneratorHTTP {
-		return HTTPCommand(spec, run)
+		return httpCommand(spec, run)
 	}
 	return BenchCommand(spec, run)
 }
 
-func HTTPCommand(spec Spec, run PlannedRun) CommandSpec {
+func httpCommand(spec Spec, run PlannedRun) CommandSpec {
 	builder := argBuilder{
-		"localperf", "bench", "http-load",
+		"internal:http-load",
 		"--backend", run.Workload.Backend,
 		"--base-url", baseURL(run.Profile),
 		"--model", run.Profile.Model,
@@ -173,7 +173,7 @@ func appendHTTPOptionalArgs(builder *argBuilder, workload Workload) {
 func WarmupCommand(spec Spec, profile Profile, runDir string) CommandSpec {
 	warmup := spec.Warmup
 	engine := EngineForProfile(spec, profile)
-	command := engineBenchCommand(spec, engine)
+	command := engineBenchCommand(engine)
 	resultFile := ResultPath(runDir, profile.Name, "warmup", warmup.MaxConcurrency)
 	args := []string{
 		command,
@@ -205,30 +205,18 @@ func EngineForProfile(spec Spec, profile Profile) EngineConfig {
 			return engine
 		}
 	}
-	if len(spec.Engines) > 0 {
-		return spec.Engines[0]
-	}
-	return EngineConfig{Name: "vllm", Type: "vllm-managed", Command: spec.Runner.VLLMCommand, BenchCommand: spec.Runner.VLLMBenchCommand}
+	return EngineConfig{}
 }
 
-func engineCommand(spec Spec, engine EngineConfig) string {
-	if strings.TrimSpace(engine.Command) == "" {
-		return spec.Runner.VLLMCommand
-	}
-	if engine.Command == "vllm" && strings.TrimSpace(spec.Runner.VLLMCommand) != "" && spec.Runner.VLLMCommand != "vllm" {
-		return spec.Runner.VLLMCommand
-	}
+func engineCommand(engine EngineConfig) string {
 	return engine.Command
 }
 
-func engineBenchCommand(spec Spec, engine EngineConfig) string {
-	if strings.TrimSpace(engine.BenchCommand) != "" && !(engine.BenchCommand == "vllm" && spec.Runner.VLLMBenchCommand != "" && spec.Runner.VLLMBenchCommand != "vllm") {
+func engineBenchCommand(engine EngineConfig) string {
+	if strings.TrimSpace(engine.BenchCommand) != "" {
 		return engine.BenchCommand
 	}
-	if strings.TrimSpace(spec.Runner.VLLMBenchCommand) != "" {
-		return spec.Runner.VLLMBenchCommand
-	}
-	return engineCommand(spec, engine)
+	return engine.Command
 }
 
 func appendTrafficArgs(args []string, traffic BenchmarkTrafficConfig) []string {

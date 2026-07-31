@@ -3,7 +3,6 @@ package vllmbench
 import (
 	"encoding/json"
 	"math"
-	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,25 +10,11 @@ import (
 	"github.com/osolmaz/localperf/internal/collections"
 )
 
-func TestParseResultFileVariants(t *testing.T) {
+func TestParseResultFileRequiresCanonicalObject(t *testing.T) {
 	dir := t.TempDir()
-	arrayPath := filepath.Join(dir, "array.json")
-	writeFile(t, arrayPath, `[
-  {
-    "profile": "p1",
-    "workload": "w1",
-    "dataset": "random",
-    "context": 4096,
-    "concurrency": 4,
-    "random_input_len": 1024,
-    "random_output_len": 256,
-    "completed": 8,
-    "output_throughput": 40,
-    "total_token_throughput": 80,
-    "mean_ttft_ms": 12.5
-  }
-]`)
-	rows, err := ParseResultFile(arrayPath)
+	path := filepath.Join(dir, "result.json")
+	writeFile(t, path, `{"dataset_name":"random","max_concurrency":4,"random_input_len":1024,"random_output_len":256,"completed":8,"failed":0,"total_input_tokens":8192,"total_output_tokens":2048,"total_tokens":10240,"duration":2,"output_throughput":40,"total_token_throughput":80,"mean_ttft_ms":12.5}`)
+	rows, err := parseResultFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,65 +23,32 @@ func TestParseResultFileVariants(t *testing.T) {
 	}
 	row := rows[0]
 	if row.DatasetName != "random" || row.InputLen != 1024 || row.OutputLen != 256 || row.Phase != "decode" {
-		t.Fatalf("row lengths were not derived: %+v", row)
+		t.Fatalf("canonical result not parsed: %+v", row)
 	}
-	if row.PerUserOutputTokSec != 10 {
-		t.Fatalf("per-user throughput = %v, want 10", row.PerUserOutputTokSec)
-	}
-
-	objectPath := filepath.Join(dir, "object.json")
-	writeFile(t, objectPath, `{"ok": 2, "failed": 1, "duration": 3.5}`)
-	rows, err = ParseResultFile(objectPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rows[0].Completed != 2 || rows[0].Failed != 1 || rows[0].DurationSeconds != 3.5 {
-		t.Fatalf("object row not parsed: %+v", rows[0])
+	if row.Completed != 8 || row.PerUserOutputTokSec != 10 {
+		t.Fatalf("canonical counts/throughput = %d/%v, want 8/10", row.Completed, row.PerUserOutputTokSec)
 	}
 
-	jsonlPath := filepath.Join(dir, "rows.jsonl")
-	writeFile(t, jsonlPath, "\n{\"profile\":\"p2\",\"successes\":3}\n{\"profile\":\"p3\",\"errors\":2}\n")
-	rows, err = ParseResultFile(jsonlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 2 || rows[0].Completed != 3 || rows[1].Failed != 2 {
-		t.Fatalf("jsonl rows not parsed: %+v", rows)
-	}
-
-	emptyPath := filepath.Join(dir, "empty.json")
-	writeFile(t, emptyPath, "  \n")
-	rows, err = ParseResultFile(emptyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 0 {
-		t.Fatalf("empty rows = %d, want 0", len(rows))
-	}
-
-	badPath := filepath.Join(dir, "bad.json")
-	writeFile(t, badPath, `{"profile":`)
-	if _, err := ParseResultFile(badPath); err == nil {
-		t.Fatal("expected malformed result to fail")
-	}
-}
-
-func TestParseResultDirectorySortsAndSkipsInvalidFiles(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(dir, "notes.txt"), "ignored")
-	writeFile(t, filepath.Join(dir, "bad.json"), "{")
-	writeFile(t, filepath.Join(dir, "b.json"), `{"profile":"b","workload":"w","concurrency":2}`)
-	writeFile(t, filepath.Join(dir, "a.jsonl"), `{"profile":"a","workload":"w","concurrency":1}`)
-
-	rows, err := parseResultDirectory(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := []string{rows[0].Profile, rows[1].Profile}; !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Fatalf("profiles = %#v, want sorted a,b", got)
+	for name, content := range map[string]string{
+		"array":   `[{"completed":1}]`,
+		"jsonl":   "{\"completed\":1}\n{\"completed\":1}\n",
+		"aliases": `{"ok":1,"errors":0,"wall_seconds":1,"aggregate_completion_tokens_per_second":2}`,
+	} {
+		path := filepath.Join(dir, name+".json")
+		writeFile(t, path, content)
+		rows, err := parseResultFile(path)
+		if name == "aliases" {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rows[0].Completed != 0 || rows[0].DurationSeconds != 0 || rows[0].OutputTokensPerSec != 0 {
+				t.Fatalf("removed aliases still affected result: %+v", rows[0])
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%s result was accepted", name)
+		}
 	}
 }
 

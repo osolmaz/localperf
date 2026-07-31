@@ -1,13 +1,14 @@
 package vllmbench
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,9 @@ const DefaultHealthPath = "/v1/models"
 const (
 	LoadGeneratorVLLMBench = "vllm_bench"
 	LoadGeneratorHTTP      = "localperf_http"
+
+	WorkloadRoleBenchmark  = "benchmark"
+	WorkloadRoleDiagnostic = "diagnostic"
 )
 
 // TTFTSourceStream marks TTFT stats measured from streamed responses. It is
@@ -108,8 +112,6 @@ type EngineConfig struct {
 }
 
 type RunnerConfig struct {
-	VLLMCommand          string         `json:"vllm_command,omitempty"`
-	VLLMBenchCommand     string         `json:"vllm_bench_command,omitempty"`
 	OneAwakeProfile      *bool          `json:"one_awake_profile,omitempty"`
 	PrebootProfiles      bool           `json:"preboot_profiles,omitempty"`
 	StopManagedOnExit    *bool          `json:"stop_managed_on_exit,omitempty"`
@@ -170,7 +172,6 @@ type Profile struct {
 	EnableSleepMode      bool              `json:"enable_sleep_mode,omitempty"`
 	SleepLevel           *int              `json:"sleep_level,omitempty"`
 	HealthPath           string            `json:"health_path,omitempty"`
-	Serve                ServeConfig       `json:"serve,omitempty"`
 	MaxModelLen          int               `json:"max_model_len,omitempty"`
 	MaxNumSeqs           int               `json:"max_num_seqs,omitempty"`
 	MaxNumBatchedTokens  int               `json:"max_num_batched_tokens,omitempty"`
@@ -186,38 +187,24 @@ type Profile struct {
 
 type Workload struct {
 	BenchmarkTrafficConfig
-	Name                    string                 `json:"name"`
-	Phase                   string                 `json:"phase,omitempty"`
-	ContextTarget           int                    `json:"context_target"`
-	ContextSemantics        string                 `json:"context_semantics"`
-	SLO                     *SLOConfig             `json:"slo,omitempty"`
-	LoadGenerator           string                 `json:"load_generator,omitempty"`
-	Dataset                 DatasetSpec            `json:"dataset,omitempty"`
-	Request                 RequestSpec            `json:"request,omitempty"`
-	Load                    LoadConfig             `json:"load,omitempty"`
-	Profiles                []string               `json:"profiles,omitempty"`
-	NumPrompts              int                    `json:"num_prompts"`
-	PromptsPerUser          int                    `json:"prompts_per_user,omitempty"`
-	Samples                 int                    `json:"samples,omitempty"`
-	Repeats                 int                    `json:"repeats,omitempty"`
-	MaxConcurrency          []int                  `json:"max_concurrency"`
-	Concurrency             []int                  `json:"concurrency,omitempty"`
-	Traffic                 BenchmarkTrafficConfig `json:"traffic,omitempty"`
-	Stream                  *bool                  `json:"stream,omitempty"`
-	IgnoreEOS               bool                   `json:"ignore_eos,omitempty"`
-	Temperature             *float64               `json:"temperature,omitempty"`
-	CapturePayloadArtifacts bool                   `json:"capture_payload_artifacts,omitempty"`
-}
-
-type ServeConfig struct {
-	MaxModelLen          int     `json:"max_model_len,omitempty"`
-	MaxNumSeqs           int     `json:"max_num_seqs,omitempty"`
-	MaxNumBatchedTokens  int     `json:"max_num_batched_tokens,omitempty"`
-	GPUMemoryUtilization float64 `json:"gpu_memory_utilization,omitempty"`
-	KVCacheDType         string  `json:"kv_cache_dtype,omitempty"`
-	AttentionBackend     string  `json:"attention_backend,omitempty"`
-	MoEBackend           string  `json:"moe_backend,omitempty"`
-	EnablePrefixCaching  *bool   `json:"enable_prefix_caching,omitempty"`
+	Name                    string      `json:"name"`
+	Role                    string      `json:"role"`
+	Phase                   string      `json:"phase,omitempty"`
+	ContextTarget           int         `json:"context_target"`
+	ContextSemantics        string      `json:"context_semantics"`
+	SLO                     *SLOConfig  `json:"slo,omitempty"`
+	LoadGenerator           string      `json:"load_generator,omitempty"`
+	Dataset                 DatasetSpec `json:"dataset,omitempty"`
+	Request                 RequestSpec `json:"request,omitempty"`
+	Profiles                []string    `json:"profiles,omitempty"`
+	NumPrompts              int         `json:"num_prompts"`
+	PromptsPerUser          int         `json:"prompts_per_user,omitempty"`
+	Repeats                 int         `json:"repeats,omitempty"`
+	MaxConcurrency          []int       `json:"max_concurrency"`
+	Stream                  *bool       `json:"stream,omitempty"`
+	IgnoreEOS               bool        `json:"ignore_eos,omitempty"`
+	Temperature             *float64    `json:"temperature,omitempty"`
+	CapturePayloadArtifacts bool        `json:"capture_payload_artifacts,omitempty"`
 }
 
 // SLOConfig declares latency targets for goodput derivation: the fraction of
@@ -277,7 +264,15 @@ func LoadSpec(path string) (Spec, error) {
 		return Spec{}, err
 	}
 	var spec Spec
-	if err := json.Unmarshal(data, &spec); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&spec); err != nil {
+		return Spec{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return Spec{}, errors.New("spec must contain exactly one JSON document")
+		}
 		return Spec{}, err
 	}
 	// Verify provenance against the raw file bytes, before unmarshalling
@@ -293,7 +288,6 @@ func LoadSpec(path string) (Spec, error) {
 
 func ApplyDefaults(spec *Spec) {
 	applyRunnerDefaults(spec)
-	applyEngineDefaults(spec)
 	applySafetyDefaults(spec)
 	applyProfileDefaults(spec)
 	applyWarmupDefaults(&spec.Warmup)
@@ -301,17 +295,11 @@ func ApplyDefaults(spec *Spec) {
 }
 
 func applyRunnerDefaults(spec *Spec) {
-	if strings.TrimSpace(spec.Runner.VLLMCommand) == "" {
-		spec.Runner.VLLMCommand = "vllm"
-	}
 	if spec.Runner.Adaptive.MinThroughputGainPct == 0 {
 		spec.Runner.Adaptive.MinThroughputGainPct = defaultMinThroughputGainPct
 	}
 	if spec.Runner.Adaptive.MaxConcurrencyFactor == 0 {
 		spec.Runner.Adaptive.MaxConcurrencyFactor = defaultMaxConcurrencyFactor
-	}
-	if strings.TrimSpace(spec.Runner.VLLMBenchCommand) == "" {
-		spec.Runner.VLLMBenchCommand = "vllm"
 	}
 	defaultTrue(&spec.Runner.OneAwakeProfile)
 	defaultTrue(&spec.Runner.StopManagedOnExit)
@@ -322,36 +310,6 @@ func defaultTrue(value **bool) {
 	if *value == nil {
 		yes := true
 		*value = &yes
-	}
-}
-
-func applyEngineDefaults(spec *Spec) {
-	if len(spec.Engines) == 0 {
-		spec.Engines = defaultEngines(spec.Runner)
-	}
-	for i := range spec.Engines {
-		applyEngineDefault(&spec.Engines[i], spec.Runner)
-	}
-}
-
-func defaultEngines(runner RunnerConfig) []EngineConfig {
-	return []EngineConfig{{
-		Name:         "vllm",
-		Type:         "vllm-managed",
-		Command:      runner.VLLMCommand,
-		BenchCommand: runner.VLLMBenchCommand,
-	}}
-}
-
-func applyEngineDefault(engine *EngineConfig, runner RunnerConfig) {
-	if strings.TrimSpace(engine.Type) == "" {
-		engine.Type = "vllm-managed"
-	}
-	if strings.TrimSpace(engine.Command) == "" && engine.Type == "vllm-managed" {
-		engine.Command = runner.VLLMCommand
-	}
-	if strings.TrimSpace(engine.BenchCommand) == "" && engine.Type == "vllm-managed" {
-		engine.BenchCommand = runner.VLLMBenchCommand
 	}
 }
 
@@ -387,7 +345,7 @@ func applyProfileDefault(profile *Profile, spec *Spec) {
 	if strings.TrimSpace(profile.HealthPath) == "" {
 		profile.HealthPath = DefaultHealthPath
 	}
-	applyServeDefaults(profile)
+	applyPrefixCachingDefault(profile)
 	if profile.EnableSleepMode && profile.SleepLevel == nil {
 		profile.SleepLevel = intPointer(2)
 	}
@@ -411,7 +369,6 @@ func applyWorkloadDefaults(workloads []Workload) {
 }
 
 func applyWorkloadDefault(workload *Workload) {
-	applyWorkloadCompatibilityDefaults(workload)
 	applyWorkloadConcurrencyDefaults(workload)
 	applyStructuredWorkloadDefaults(workload)
 	applyWorkloadExecutionDefaults(workload)
@@ -426,29 +383,8 @@ func applyWorkloadDefault(workload *Workload) {
 	}
 }
 
-func applyWorkloadCompatibilityDefaults(workload *Workload) {
-	if !trafficConfigEmpty(workload.Traffic) {
-		workload.BenchmarkTrafficConfig = overlayTrafficConfig(workload.BenchmarkTrafficConfig, workload.Traffic)
-	}
-	if strings.TrimSpace(workload.LoadGenerator) == "" && strings.TrimSpace(workload.Load.Generator) != "" {
-		workload.LoadGenerator = workload.Load.Generator
-	}
-	if workload.NumPrompts <= 0 && workload.Samples > 0 {
-		workload.NumPrompts = workload.Samples
-	}
-}
-
-// applyWorkloadConcurrencyDefaults resolves the concurrency ladder before
-// prompt counts and dataset sample counts derive from it. Precedence stays:
-// explicit max_concurrency, then load.max_concurrency (structured), then the
-// concurrency alias.
+// applyWorkloadConcurrencyDefaults sorts the declared concurrency ladder.
 func applyWorkloadConcurrencyDefaults(workload *Workload) {
-	if len(workload.MaxConcurrency) == 0 && hasStructuredDataset(*workload) && len(workload.Load.MaxConcurrency) > 0 {
-		workload.MaxConcurrency = append([]int(nil), workload.Load.MaxConcurrency...)
-	}
-	if len(workload.MaxConcurrency) == 0 && len(workload.Concurrency) > 0 {
-		workload.MaxConcurrency = append([]int(nil), workload.Concurrency...)
-	}
 	// Ladders run ascending: the documented sparse search depends on it and
 	// the adaptive stop rules compare against the previous (lower) point.
 	sort.Ints(workload.MaxConcurrency)
@@ -479,7 +415,6 @@ func applyStructuredWorkloadDefaults(workload *Workload) {
 	}
 	workload.Dataset.Type = normalizeDatasetType(workload.Dataset.Type)
 	applyDatasetDefaults(workload)
-	applyLoadDefaults(workload)
 	applyRequestDefaults(workload)
 }
 
@@ -505,15 +440,6 @@ func defaultDatasetSampleCount(workload Workload) int {
 		return resolvedNumPrompts(workload, largestConcurrency(workload))
 	}
 	return 0
-}
-
-func applyLoadDefaults(workload *Workload) {
-	if strings.TrimSpace(workload.BenchmarkTrafficConfig.RequestRate) == "" && strings.TrimSpace(workload.Load.RequestRate) != "" {
-		workload.BenchmarkTrafficConfig.RequestRate = workload.Load.RequestRate
-	}
-	if strings.TrimSpace(workload.LoadGenerator) == "" && strings.TrimSpace(workload.Load.Generator) != "" {
-		workload.LoadGenerator = workload.Load.Generator
-	}
 }
 
 func applyRequestDefaults(workload *Workload) {
@@ -582,37 +508,7 @@ func phaseFromTokenShape(inputLen, outputLen int) string {
 	return ""
 }
 
-func trafficConfigEmpty(traffic BenchmarkTrafficConfig) bool {
-	return reflect.DeepEqual(traffic, BenchmarkTrafficConfig{})
-}
-
-func overlayTrafficConfig(base, override BenchmarkTrafficConfig) BenchmarkTrafficConfig {
-	baseValue := reflect.ValueOf(&base).Elem()
-	overrideValue := reflect.ValueOf(override)
-	for i := 0; i < overrideValue.NumField(); i++ {
-		field := overrideValue.Field(i)
-		zero := reflect.Zero(field.Type())
-		if reflect.DeepEqual(field.Interface(), zero.Interface()) {
-			continue
-		}
-		baseValue.Field(i).Set(field)
-	}
-	return base
-}
-
-func applyServeDefaults(profile *Profile) {
-	fallbackInt(&profile.MaxModelLen, profile.Serve.MaxModelLen)
-	fallbackInt(&profile.MaxNumSeqs, profile.Serve.MaxNumSeqs)
-	fallbackInt(&profile.MaxNumBatchedTokens, profile.Serve.MaxNumBatchedTokens)
-	if profile.GPUMemoryUtilization == 0 {
-		profile.GPUMemoryUtilization = profile.Serve.GPUMemoryUtilization
-	}
-	fallbackString(&profile.KVCacheDType, profile.Serve.KVCacheDType)
-	fallbackString(&profile.AttentionBackend, profile.Serve.AttentionBackend)
-	fallbackString(&profile.MoEBackend, profile.Serve.MoEBackend)
-	if profile.EnablePrefixCaching == nil {
-		profile.EnablePrefixCaching = profile.Serve.EnablePrefixCaching
-	}
+func applyPrefixCachingDefault(profile *Profile) {
 	if profile.EnablePrefixCaching == nil {
 		profile.EnablePrefixCaching = prefixCachingFromArgs(profile.Args, profile.EngineArgs)
 	}
@@ -637,18 +533,6 @@ func prefixCachingFromArgs(argLists ...[]string) *bool {
 		}
 	}
 	return value
-}
-
-func fallbackInt(target *int, fallback int) {
-	if *target == 0 {
-		*target = fallback
-	}
-}
-
-func fallbackString(target *string, fallback string) {
-	if strings.TrimSpace(*target) == "" {
-		*target = fallback
-	}
 }
 
 func applyTrafficDefaults(traffic *BenchmarkTrafficConfig, defaultDataset string) {
@@ -680,17 +564,7 @@ func workloadStreams(workload Workload) bool {
 }
 
 func normalizeLoadGenerator(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	switch value {
-	case "":
-		return ""
-	case LoadGeneratorVLLMBench, "vllm-bench", "vllmbench":
-		return LoadGeneratorVLLMBench
-	case LoadGeneratorHTTP, "localperf-http", "http", "openai-http":
-		return LoadGeneratorHTTP
-	default:
-		return value
-	}
+	return strings.TrimSpace(strings.ToLower(value))
 }
 
 func RedactedSpec(spec Spec) Spec {
@@ -763,6 +637,9 @@ func validateLadderTrim(index int, trim artifact.LadderTrim) []string {
 
 func validateSpecBasics(spec Spec) []string {
 	var issues []string
+	if spec.Version != "1" {
+		issues = append(issues, `version must be "1"`)
+	}
 	if strings.TrimSpace(spec.Name) == "" {
 		issues = append(issues, "name is required")
 	}
@@ -1159,12 +1036,42 @@ func TokenCountLabel(value int) string {
 
 func validateWorkloadFields(prefix string, workload Workload) []string {
 	var issues []string
+	issues = append(issues, validateWorkloadRole(prefix, workload)...)
 	issues = append(issues, validateWorkloadDatasetName(prefix, workload)...)
 	issues = append(issues, validateWorkloadPositiveFields(prefix, workload)...)
+	issues = append(issues, validateWorkloadSamplePolicy(prefix, workload)...)
 	issues = append(issues, validateWorkloadPhase(prefix, workload)...)
 	issues = append(issues, validateLoadGenerator(prefix, workload.LoadGenerator)...)
 	issues = append(issues, validateLoadGeneratorDataset(prefix, workload)...)
 	return append(issues, validateStructuredDataset(prefix, workload)...)
+}
+
+func validateWorkloadRole(prefix string, workload Workload) []string {
+	switch workload.Role {
+	case WorkloadRoleBenchmark, WorkloadRoleDiagnostic:
+		return nil
+	default:
+		return []string{prefix + `: role must be "benchmark" or "diagnostic"`}
+	}
+}
+
+func validateWorkloadSamplePolicy(prefix string, workload Workload) []string {
+	if workload.Role != WorkloadRoleBenchmark {
+		return nil
+	}
+	var issues []string
+	if workload.PromptsPerUser > 0 && workload.PromptsPerUser < 2 {
+		issues = append(issues, prefix+": benchmark prompts_per_user must be at least 2")
+	}
+	for _, concurrency := range workload.MaxConcurrency {
+		required := max(8, 2*concurrency)
+		if actual := resolvedNumPrompts(workload, concurrency); actual < required {
+			issues = append(issues, fmt.Sprintf(
+				"%s: benchmark concurrency %d resolves to %d prompts; need at least %d (max(8, 2 * concurrency))",
+				prefix, concurrency, actual, required))
+		}
+	}
+	return issues
 }
 
 func validateWorkloadDatasetName(prefix string, workload Workload) []string {
