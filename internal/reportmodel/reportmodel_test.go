@@ -38,6 +38,17 @@ func TestBuildMergesRunsButSplitsActiveContexts(t *testing.T) {
 	}
 }
 
+func TestTotalMeasurementCountIncludesAggregatedRepeats(t *testing.T) {
+	measurements := []report.SQLiteReportMeasurement{
+		{RepeatCount: 3},
+		{},
+		{RepeatCount: 6},
+	}
+	if got := TotalMeasurementCount(measurements); got != 10 {
+		t.Fatalf("measurement count = %d, want 10", got)
+	}
+}
+
 func TestBuildLabelsUnverifiedContext(t *testing.T) {
 	doc := report.SQLiteReportDocument{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),

@@ -221,7 +221,7 @@ func summarizeReport(index int, path string, doc report.SQLiteReportDocument) Re
 		LatestRunName:    doc.Run.Name,
 		LatestRunStatus:  doc.Run.Status,
 		RunCount:         len(doc.Runs),
-		MeasurementCount: len(doc.Measurements),
+		MeasurementCount: reportmodel.TotalMeasurementCount(doc.Measurements),
 		Engine:           reportEngine(doc),
 	}
 }

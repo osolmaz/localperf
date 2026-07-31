@@ -212,13 +212,34 @@ func TestMeasurementEffectivePrefillRequiresCompleteStreamEvidence(t *testing.T)
 	}
 }
 
-func TestValidateStreamedTTFTEvidenceRejectsNonStreamedSample(t *testing.T) {
-	err := validateStreamedTTFTEvidence(ReportRow{TTFTSource: TTFTSourceStream}, []RequestSample{{
+func TestValidateStreamedTTFTEvidenceRejectsIncompleteSample(t *testing.T) {
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	firstToken := start.Add(100 * time.Millisecond)
+	valid := RequestSample{
 		RequestIndex: 3,
 		Status:       "completed",
+		Streamed:     true,
+		StartedAt:    start,
+		FirstByteAt:  &firstToken,
 		TTFTMillis:   100,
-	}})
-	if err == nil {
-		t.Fatal("streamed TTFT provenance accepted a non-streamed sample")
+		PromptTokens: 100,
+	}
+	for name, mutate := range map[string]func(*RequestSample){
+		"non-streamed":  func(sample *RequestSample) { sample.Streamed = false },
+		"missing start": func(sample *RequestSample) { sample.StartedAt = time.Time{} },
+		"missing token": func(sample *RequestSample) { sample.FirstByteAt = nil },
+		"missing TTFT":  func(sample *RequestSample) { sample.TTFTMillis = 0 },
+		"missing count": func(sample *RequestSample) { sample.PromptTokens = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			sample := valid
+			mutate(&sample)
+			if err := validateStreamedTTFTEvidence(ReportRow{TTFTSource: TTFTSourceStream}, []RequestSample{sample}); err == nil {
+				t.Fatal("streamed TTFT provenance accepted incomplete evidence")
+			}
+		})
+	}
+	if err := validateStreamedTTFTEvidence(ReportRow{TTFTSource: TTFTSourceStream}, []RequestSample{valid}); err != nil {
+		t.Fatalf("valid streamed TTFT evidence rejected: %v", err)
 	}
 }
