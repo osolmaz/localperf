@@ -10,6 +10,16 @@ LocalPerf already stores the data needed to report TTFT, decode speed, and pract
 
 This plan fixes the writer and adds full-run timing metrics to the report. The existing GGUF benchmark will be rebuilt from its saved result files. No model inference will run again.
 
+## Implementation status
+
+The writer and report changes were implemented in `48e5af0`. The primary viewer gained the same full-run table in `e506b6f`.
+
+The three saved GGUF run directories were re-imported with `bench run --resume`. No inference server started and no benchmark request ran. The rebuilt artifact has 12 measurements and 42 completed requests. All 42 requests are streamed, contain TTFT and `first_token_at`, and generated exactly 1,024 tokens. All 12 measurements carry `ttft_source: stream` and the three new metrics.
+
+For `generate-full`, the rebuilt report shows effective aggregate prefill of `1807 ± 28.0 tok/s` at c1 and `1669 ± 26.1 tok/s` at c6. The c6 per-request effective prefill mean is `672 ± 14.4 tok/s`, and its TPOT-derived decode mean is `7.28 ± 0.11 tok/s` per request.
+
+The artifact passed `localperf artifact check`. The rendered report and viewer both show the new table. The viewer is available at `http://isengard.taild0946b.ts.net:8088` while the temporary viewer process is running.
+
 ## Outcome
 
 A completed full-context generation row will report these separate measurements:
