@@ -317,7 +317,8 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 
 func applyDerivedPrefillMetrics(target *ThroughputRow, source report.SQLiteReportThroughputRow) {
 	value := strings.TrimSpace(source.EffectivePrefillTokS)
-	if value == "" || value == "-" || (!target.Prefill.Derived && phaseHasUsableMetric(target.Prefill)) {
+	if !strings.EqualFold(strings.TrimSpace(source.Status), "completed") || source.FailureLabel != "" ||
+		value == "" || value == "-" || (!target.Prefill.Derived && phaseHasUsableMetric(target.Prefill)) {
 		return
 	}
 	target.Prefill = PhaseMetrics{
