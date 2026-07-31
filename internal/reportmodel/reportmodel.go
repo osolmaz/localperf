@@ -201,13 +201,27 @@ func TotalMeasurementCount(measurements []report.SQLiteReportMeasurement) int {
 
 func buildThroughputTables(doc report.SQLiteReportDocument, details map[int64]CellDetail) []ThroughputTable {
 	builders := []*tableBuilder{}
-	for _, row := range doc.ThroughputRows {
-		builder := compatibleBuilder(builders, row)
-		if builder == nil {
-			builder = newTableBuilder(row, len(builders)+1)
-			builders = append(builders, builder)
+	for pass := 0; pass < 2; pass++ {
+		for _, row := range doc.ThroughputRows {
+			prefill := row.Mode == "prefill"
+			if prefill != (pass == 1) {
+				continue
+			}
+			if prefill {
+				if matches := matchingPrefillBuilders(builders, row); len(matches) > 0 {
+					for _, builder := range matches {
+						applyRow(builder, row, details)
+					}
+					continue
+				}
+			}
+			builder := compatibleBuilder(builders, row)
+			if builder == nil {
+				builder = newTableBuilder(row, len(builders)+1)
+				builders = append(builders, builder)
+			}
+			applyRow(builder, row, details)
 		}
-		applyRow(builder, row, details)
 	}
 	tables := make([]ThroughputTable, 0, len(builders))
 	for _, builder := range builders {
@@ -224,6 +238,24 @@ func buildThroughputTables(doc report.SQLiteReportDocument, details map[int64]Ce
 		return tables[i].ID < tables[j].ID
 	})
 	return tables
+}
+
+func matchingPrefillBuilders(builders []*tableBuilder, row report.SQLiteReportThroughputRow) []*tableBuilder {
+	matches := make([]*tableBuilder, 0, len(builders))
+	for _, builder := range builders {
+		if builder.table.Profile != row.Profile || builder.table.Model != row.Model ||
+			builder.table.ServerLimit != row.ContextWindow || builder.claimKey != row.ClaimKey() {
+			continue
+		}
+		existing := builder.rows[row.Concurrency]
+		if existing == nil {
+			continue
+		}
+		if !existing.Prefill.Available || existing.Prefill.Derived || existing.Prefill.Shape == row.Shape {
+			matches = append(matches, builder)
+		}
+	}
+	return matches
 }
 
 func compatibleBuilder(builders []*tableBuilder, row report.SQLiteReportThroughputRow) *tableBuilder {

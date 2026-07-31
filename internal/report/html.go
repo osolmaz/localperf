@@ -1989,47 +1989,39 @@ func sqliteReportThroughputGroups(rows []SQLiteReportThroughputRow) []SQLiteRepo
 	rowIndexes := []map[int]int{}
 	mismatchNotes := make([]string, 0)
 	claims := []throughputGroupClaim{}
-	for _, row := range rows {
-		key := throughputGroupKey{
-			profile:      row.Profile,
-			contextLabel: row.ClaimKey(),
-		}
-		index, ok := compatibleThroughputGroup(groups, rowIndexes, groupIndexes[key], row)
-		if !ok {
-			index = len(groups)
-			groupIndexes[key] = append(groupIndexes[key], index)
-			groups = append(groups, SQLiteReportThroughputGroup{
-				Title:          row.ContextLabel,
-				Profile:        key.profile,
-				ContextSortKey: row.ContextSortKey,
-				ServerLimit:    row.ContextWindow,
-			})
-			if row.Mode != "prefill" {
-				groups[index].DecodeWorkload = row.Workload
+	for pass := 0; pass < 2; pass++ {
+		for _, row := range rows {
+			prefill := row.Mode == "prefill"
+			if prefill != (pass == 1) {
+				continue
 			}
-			rowIndexes = append(rowIndexes, map[int]int{})
-			mismatchNotes = append(mismatchNotes, "")
-			claims = append(claims, throughputGroupClaim{semantics: row.ContextSemantics, target: row.ContextTarget, fallback: row.ContextLabel})
+			key := throughputGroupKey{profile: row.Profile, contextLabel: row.ClaimKey()}
+			indexes := []int{}
+			if prefill {
+				indexes = matchingPrefillGroupIndexes(groups, rowIndexes, groupIndexes[key], row)
+			}
+			if len(indexes) == 0 {
+				index, ok := compatibleThroughputGroup(groups, rowIndexes, groupIndexes[key], row)
+				if !ok {
+					index = len(groups)
+					groupIndexes[key] = append(groupIndexes[key], index)
+					groups = append(groups, SQLiteReportThroughputGroup{
+						Title: row.ContextLabel, Profile: key.profile,
+						ContextSortKey: row.ContextSortKey, ServerLimit: row.ContextWindow,
+					})
+					if !prefill {
+						groups[index].DecodeWorkload = row.Workload
+					}
+					rowIndexes = append(rowIndexes, map[int]int{})
+					mismatchNotes = append(mismatchNotes, "")
+					claims = append(claims, throughputGroupClaim{semantics: row.ContextSemantics, target: row.ContextTarget, fallback: row.ContextLabel})
+				}
+				indexes = []int{index}
+			}
+			for _, index := range indexes {
+				applyThroughputGroupRow(groups, rowIndexes, mismatchNotes, claims, index, row)
+			}
 		}
-		if row.Mode != "prefill" && groups[index].DecodeWorkload == "" {
-			groups[index].DecodeWorkload = row.Workload
-		}
-		if row.ContextVerified {
-			claims[index].anyVerified = true
-		}
-		if strings.EqualFold(strings.TrimSpace(row.Status), "completed") && !row.ContextVerified && !row.ContextMismatch {
-			claims[index].completedUnverified++
-		}
-		if row.ContextMismatch && row.MismatchNote != "" {
-			mismatchNotes[index] = row.MismatchNote
-		}
-		rowIndex, ok := rowIndexes[index][row.Concurrency]
-		if !ok {
-			rowIndex = len(groups[index].Rows)
-			rowIndexes[index][row.Concurrency] = rowIndex
-			groups[index].Rows = append(groups[index].Rows, emptyThroughputComparisonRow(row.Concurrency))
-		}
-		applyThroughputComparisonSource(&groups[index].Rows[rowIndex], row)
 	}
 	for index := range groups {
 		groups[index].Title = ClaimTitle(claims[index].semantics, claims[index].target, claims[index].verified(), claims[index].fallback)
@@ -2045,6 +2037,43 @@ func sqliteReportThroughputGroups(rows []SQLiteReportThroughputRow) []SQLiteRepo
 		return left < right
 	})
 	return groups
+}
+
+func matchingPrefillGroupIndexes(groups []SQLiteReportThroughputGroup, rowIndexes []map[int]int, candidates []int, source SQLiteReportThroughputRow) []int {
+	matches := make([]int, 0, len(candidates))
+	for _, index := range candidates {
+		rowIndex, ok := rowIndexes[index][source.Concurrency]
+		if !ok {
+			continue
+		}
+		target := groups[index].Rows[rowIndex]
+		if !target.PrefillDetail.Available || target.PrefillDerived || target.PrefillShape == source.Shape {
+			matches = append(matches, index)
+		}
+	}
+	return matches
+}
+
+func applyThroughputGroupRow(groups []SQLiteReportThroughputGroup, rowIndexes []map[int]int, mismatchNotes []string, claims []throughputGroupClaim, index int, row SQLiteReportThroughputRow) {
+	if row.Mode != "prefill" && groups[index].DecodeWorkload == "" {
+		groups[index].DecodeWorkload = row.Workload
+	}
+	if row.ContextVerified {
+		claims[index].anyVerified = true
+	}
+	if strings.EqualFold(strings.TrimSpace(row.Status), "completed") && !row.ContextVerified && !row.ContextMismatch {
+		claims[index].completedUnverified++
+	}
+	if row.ContextMismatch && row.MismatchNote != "" {
+		mismatchNotes[index] = row.MismatchNote
+	}
+	rowIndex, ok := rowIndexes[index][row.Concurrency]
+	if !ok {
+		rowIndex = len(groups[index].Rows)
+		rowIndexes[index][row.Concurrency] = rowIndex
+		groups[index].Rows = append(groups[index].Rows, emptyThroughputComparisonRow(row.Concurrency))
+	}
+	applyThroughputComparisonSource(&groups[index].Rows[rowIndex], row)
 }
 
 func compatibleThroughputGroup(
