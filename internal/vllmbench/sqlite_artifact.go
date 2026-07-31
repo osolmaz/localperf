@@ -924,8 +924,11 @@ func validateStreamedTTFTEvidence(row ReportRow, samples []RequestSample) error 
 		if sample.Status != "completed" {
 			continue
 		}
-		if !validEffectivePrefillSample(sample) || sample.TTFTMillis <= 0 {
-			return fmt.Errorf("request %d has incomplete streamed-TTFT evidence", sample.RequestIndex)
+		if !sample.Streamed {
+			return fmt.Errorf("request %d belongs to a streamed-TTFT measurement but is not streamed", sample.RequestIndex)
+		}
+		if sample.FirstByteAt != nil && !sample.StartedAt.IsZero() && !sample.FirstByteAt.After(sample.StartedAt) {
+			return fmt.Errorf("request %d has contradictory streamed-TTFT timestamps", sample.RequestIndex)
 		}
 	}
 	return nil
