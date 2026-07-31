@@ -203,7 +203,7 @@ For forced-length decode:
 - verify endpoint usage and finish reasons;
 - reject early stops instead of scaling or estimating their throughput.
 
-A request for 1,024 tokens is not evidence that 1,024 tokens were generated.
+A request for 1,024 tokens is not evidence that 1,024 tokens were generated. When client-side random-token lengths do not survive endpoint retokenization, calibrate with a diagnostic request, declare `measured_input_tokens_expected`, and still validate the final point from endpoint usage.
 
 ## Safety preflight
 

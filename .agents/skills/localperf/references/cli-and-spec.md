@@ -313,9 +313,7 @@ For active context:
 }
 ```
 
-The requested input plus output must be between 90% and 100% of the target.
-The paired profile must support at least that target. Reports show the target
-only when measured active-end tokens also confirm the same band.
+The requested input plus output must be between 90% and 100% of the target. When a cross-runtime tokenizer round trip changes the endpoint's measured input count, a calibrated workload may set `measured_input_tokens_expected`; preflight then checks that expected endpoint input plus output against the target while preserving the larger client request length. Set this only from a completed diagnostic calibration, start a new run after changing it, and treat endpoint usage as the final evidence. The paired profile must support at least that target. Reports show the target only when measured active-end tokens also confirm the same band.
 
 For capacity:
 

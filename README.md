@@ -139,7 +139,7 @@ Every workload also declares its role:
 "role": "benchmark"
 ```
 
-A benchmark point normally requests at least `max(8, 2 * concurrency)` prompts. A deliberate experiment whose measurement unit is one or more complete concurrent batches may instead set `batches_per_repeat`; each point then requests exactly `batches_per_repeat * concurrency` prompts, and repeats provide the replication axis. Use `"diagnostic"` for smaller probes that declare neither policy. Diagnostic evidence stays in the SQLite artifact but is excluded from benchmark reports and comparisons. Only validated SQLite artifacts written by `localperf bench run` are reportable; raw result JSON and run directories are not accepted report inputs.
+A benchmark point normally requests at least `max(8, 2 * concurrency)` prompts. A deliberate experiment whose measurement unit is one or more complete concurrent batches may instead set `batches_per_repeat`; each point then requests exactly `batches_per_repeat * concurrency` prompts, and repeats provide the replication axis. Use `"diagnostic"` for smaller probes that declare neither policy. Diagnostic evidence stays in the SQLite artifact but is excluded from benchmark reports and comparisons. Only validated SQLite artifacts written by `localperf bench run` are reportable; raw result JSON and run directories are not accepted report inputs. Cross-runtime tokenizer calibration may declare `measured_input_tokens_expected`, but only endpoint usage can validate the final active context.
 
 These checks apply to every workload, whether a spec was generated or written
 by hand. LocalPerf validates the complete spec on load, after filtering and

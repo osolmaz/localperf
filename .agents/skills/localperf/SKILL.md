@@ -43,7 +43,7 @@ schema, validation rules, or default sweep changes.
   `role: "diagnostic"` for small probes and troubleshooting.
 - A benchmark point normally needs at least `max(8, 2 * concurrency)` requests. A fixed-batch experiment may instead declare positive `batches_per_repeat`; then each point must contain exactly that many complete concurrent batches.
 - Every workload must declare `context_target` and `context_semantics`.
-- Treat requested token lengths as intent and endpoint usage counts as evidence.
+- Treat requested token lengths as intent and endpoint usage counts as evidence. Use `measured_input_tokens_expected` only after a completed cross-tokenizer calibration, and start a new run when that calibration changes.
 - Keep active context, server capacity, fresh prefill, decode, cached-prefix
   reuse, and aggregate multi-request throughput separate.
 - Keep all attempts, failures, skips, logs, telemetry, and exact commands.

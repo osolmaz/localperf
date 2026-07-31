@@ -192,6 +192,7 @@ type Workload struct {
 	Phase                   string      `json:"phase,omitempty"`
 	ContextTarget           int         `json:"context_target"`
 	ContextSemantics        string      `json:"context_semantics"`
+	MeasuredInputExpected   int         `json:"measured_input_tokens_expected,omitempty"`
 	SLO                     *SLOConfig  `json:"slo,omitempty"`
 	LoadGenerator           string      `json:"load_generator,omitempty"`
 	Dataset                 DatasetSpec `json:"dataset,omitempty"`
@@ -924,6 +925,12 @@ func validateWorkload(prefix string, workload Workload, profileNames, names map[
 // context number means active context or server capacity, and an active
 // claim must be backed by the requested token shape.
 func validateWorkloadContextSemantics(prefix string, workload Workload, profiles []Profile) []string {
+	if workload.MeasuredInputExpected < 0 {
+		return []string{prefix + ": measured_input_tokens_expected must not be negative"}
+	}
+	if workload.MeasuredInputExpected > 0 && workload.ContextSemantics != ContextSemanticsActive {
+		return []string{prefix + `: measured_input_tokens_expected requires context_semantics "active"`}
+	}
 	if workload.ContextTarget <= 0 || strings.TrimSpace(workload.ContextSemantics) == "" {
 		return []string{prefix + ": context_target and context_semantics are required on every workload; see docs/2026-07-02-context-semantics.md"}
 	}
@@ -965,12 +972,13 @@ func validateActiveContextClaim(prefix string, workload Workload, profiles []Pro
 		return []string{prefix + `: context_semantics "active" requires random_range_ratio 0 so every request stays inside the claimed band`}
 	}
 	var issues []string
-	requested := workload.RandomInputLen + workload.RandomOutputLen
+	inputTokens, claimVerb := activeInputClaim(workload)
+	requested := inputTokens + workload.RandomOutputLen
 	target := workload.ContextTarget
 	if float64(requested) < ContextTargetMinFrac*float64(target) || requested > target {
 		issues = append(issues, fmt.Sprintf(
-			"%s: claims active context %d but requests %d+%d=%d tokens (%.0f%% of target); this measures a ~%s active workload on a %s-capacity server. Either set context_target to %d, adjust random_input_len, or declare context_semantics: %q",
-			prefix, target, workload.RandomInputLen, workload.RandomOutputLen, requested,
+			"%s: claims active context %d but %s %d+%d=%d tokens (%.0f%% of target); this measures a ~%s active workload on a %s-capacity server. Either set context_target to %d, adjust the input token contract, or declare context_semantics: %q",
+			prefix, target, claimVerb, inputTokens, workload.RandomOutputLen, requested,
 			100*float64(requested)/float64(target), TokenCountLabel(requested), TokenCountLabel(target), requested, ContextSemanticsCapacity))
 	}
 	for _, profile := range pairedProfiles(workload, profiles) {
@@ -982,6 +990,13 @@ func validateActiveContextClaim(prefix string, workload Workload, profiles []Pro
 		}
 	}
 	return issues
+}
+
+func activeInputClaim(workload Workload) (int, string) {
+	if workload.MeasuredInputExpected > 0 {
+		return workload.MeasuredInputExpected, "expects measured"
+	}
+	return workload.RandomInputLen, "requests"
 }
 
 func validateCapacityContextClaim(prefix string, workload Workload, profiles []Profile) []string {

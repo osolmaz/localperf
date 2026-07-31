@@ -782,11 +782,32 @@ func TestValidateContextSemanticsAcceptsCompliantClaims(t *testing.T) {
 	if err := ValidateSpec(spec); err != nil {
 		t.Fatalf("ValidateSpec error = %v, want valid active claim", err)
 	}
+	spec.Workloads[0].ContextTarget = 65536
+	spec.Workloads[0].RandomInputLen = 68833
+	spec.Workloads[0].RandomOutputLen = 1024
+	spec.Workloads[0].MeasuredInputExpected = 64512
+	spec.Profiles[0].MaxModelLen = 65536
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatalf("ValidateSpec calibrated active claim: %v", err)
+	}
 	spec.Workloads[0].ContextSemantics = ContextSemanticsCapacity
+	spec.Workloads[0].MeasuredInputExpected = 0
 	spec.Workloads[0].RandomInputLen = 128
 	spec.Workloads[0].RandomOutputLen = 16
 	if err := ValidateSpec(spec); err != nil {
 		t.Fatalf("ValidateSpec error = %v, want valid capacity claim", err)
+	}
+}
+
+func TestValidateMeasuredInputExpectationRequiresActiveContext(t *testing.T) {
+	spec := testSpec()
+	spec.Workloads[0].MeasuredInputExpected = 1024
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), `requires context_semantics "active"`) {
+		t.Fatalf("ValidateSpec calibrated capacity claim = %v, want rejection", err)
+	}
+	spec.Workloads[0].MeasuredInputExpected = -1
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "must not be negative") {
+		t.Fatalf("ValidateSpec negative measured input = %v, want rejection", err)
 	}
 }
 

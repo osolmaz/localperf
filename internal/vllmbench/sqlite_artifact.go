@@ -457,10 +457,7 @@ func workloadSampleCount(workload Workload) int {
 func workloadClaimsJSON(workload Workload) any {
 	claims := map[string]any{}
 	if workload.ContextTarget > 0 && workload.ContextSemantics != "" {
-		claims["context"] = map[string]any{
-			"target":    workload.ContextTarget,
-			"semantics": workload.ContextSemantics,
-		}
+		claims["context"] = workloadContextClaim(workload)
 	}
 	if workload.SLO != nil {
 		claims["slo"] = workload.SLO
@@ -475,6 +472,17 @@ func workloadClaimsJSON(workload Workload) any {
 		return nil
 	}
 	return nullableJSON(claims)
+}
+
+func workloadContextClaim(workload Workload) map[string]any {
+	claim := map[string]any{
+		"target":    workload.ContextTarget,
+		"semantics": workload.ContextSemantics,
+	}
+	if workload.MeasuredInputExpected > 0 {
+		claim["measured_input_tokens_expected"] = workload.MeasuredInputExpected
+	}
+	return claim
 }
 
 func insertCanonicalDatasets(tx *sql.Tx, runID, runDir string, spec Spec) error {
