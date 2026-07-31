@@ -921,8 +921,11 @@ func validateStreamedTTFTEvidence(row ReportRow, samples []RequestSample) error 
 		return nil
 	}
 	for _, sample := range samples {
-		if sample.Status == "completed" && !sample.Streamed {
-			return fmt.Errorf("request %d belongs to a streamed-TTFT measurement but is not streamed", sample.RequestIndex)
+		if sample.Status != "completed" {
+			continue
+		}
+		if !validEffectivePrefillSample(sample) || sample.TTFTMillis <= 0 {
+			return fmt.Errorf("request %d has incomplete streamed-TTFT evidence", sample.RequestIndex)
 		}
 	}
 	return nil

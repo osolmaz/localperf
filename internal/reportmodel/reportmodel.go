@@ -173,7 +173,7 @@ func Build(path string, doc report.SQLiteReportDocument) Document {
 			LatestRun:           runSummary(doc.Run),
 			Runs:                runSummaries(doc.Runs),
 			Profiles:            profileSummaries(doc.Profiles),
-			MeasurementCount:    len(doc.Measurements),
+			MeasurementCount:    TotalMeasurementCount(doc.Measurements),
 			Warnings:            reportWarnings(tables),
 			ContextStatusCounts: contextStatusCounts(tables),
 			Legend:              doc.Legend,
@@ -181,6 +181,20 @@ func Build(path string, doc report.SQLiteReportDocument) Document {
 		Throughput: ThroughputResponse{Tables: tables},
 		Details:    details,
 	}
+}
+
+// TotalMeasurementCount returns the number of persisted measurements behind
+// the report rows, including every member of an aggregated repeat group.
+func TotalMeasurementCount(measurements []report.SQLiteReportMeasurement) int {
+	total := 0
+	for _, measurement := range measurements {
+		count := measurement.RepeatCount
+		if count < 1 {
+			count = 1
+		}
+		total += count
+	}
+	return total
 }
 
 func buildThroughputTables(doc report.SQLiteReportDocument, details map[int64]CellDetail) []ThroughputTable {
