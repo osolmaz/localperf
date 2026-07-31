@@ -62,10 +62,10 @@
 <h2>Repeats</h2>
 <details><summary>Per-repeat rows behind aggregated points</summary>
 <div class="table-wrap"><table>
-<thead><tr><th>Run</th><th>Profile</th><th>Workload</th><th class="num">Conc.</th><th class="num">Repeat</th><th>Status</th><th class="num">Done</th><th class="num">Failed</th><th class="num">Output tok/s</th><th class="num">Out/user</th><th class="num">TTFT mean</th><th class="num">Latency p95</th></tr></thead>
+<thead><tr><th>Run</th><th>Profile</th><th>Workload</th><th class="num">Conc.</th><th class="num">Repeat</th><th>Status</th><th class="num">Done</th><th class="num">Failed</th><th class="num">Output tok/s</th><th class="num">Out/user</th><th class="num">Effective prefill tok/s</th><th class="num">TTFT mean</th><th class="num">Latency p95</th></tr></thead>
 <tbody>
 {{range .Doc.RepeatDetails}}
-<tr><td>{{.RunID}}</td><td>{{.Profile}}</td><td>{{.Workload}}</td><td class="num">{{.Concurrency}}</td><td class="num">{{.RepeatIndex}}</td><td><span class="pill {{statusClass .Status}}">{{.Status}}</span></td><td class="num">{{.CompletedRequests}}</td><td class="num">{{.FailedRequests}}</td><td class="num">{{.OutputTokS}}</td><td class="num">{{.PerUserOutputTokS}}</td><td class="num">{{.TTFTMeanMS}}</td><td class="num">{{.LatencyP95MS}}</td></tr>
+<tr><td>{{.RunID}}</td><td>{{.Profile}}</td><td>{{.Workload}}</td><td class="num">{{.Concurrency}}</td><td class="num">{{.RepeatIndex}}</td><td><span class="pill {{statusClass .Status}}">{{.Status}}</span></td><td class="num">{{.CompletedRequests}}</td><td class="num">{{.FailedRequests}}</td><td class="num">{{.OutputTokS}}</td><td class="num">{{.PerUserOutputTokS}}</td><td class="num">{{.EffectivePrefillTokS}}</td><td class="num">{{.TTFTMeanMS}}</td><td class="num">{{.LatencyP95MS}}</td></tr>
 {{end}}
 </tbody>
 </table></div>

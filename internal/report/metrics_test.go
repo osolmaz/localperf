@@ -160,10 +160,10 @@ func TestThroughputGroupsPreserveDistinctGenerationWorkloads(t *testing.T) {
 		}
 	}
 	rows := []SQLiteReportThroughputRow{
-		row("generate-empty", "1 in / 1024 out", 1),
-		row("generate-empty", "1 in / 1024 out", 6),
-		row("generate-full", "64512 in / 1024 out", 1),
-		row("generate-full", "64512 in / 1024 out", 6),
+		row("generate-empty", "same shape", 1),
+		row("generate-empty", "same shape", 6),
+		row("generate-full", "same shape", 1),
+		row("generate-full", "same shape", 6),
 	}
 	groups := sqliteReportThroughputGroups(rows)
 	if len(groups) != 2 {
@@ -255,6 +255,11 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedSQLiteHTMLMetrics(t, db, measurementID)
+	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}'`); err != nil {
+		t.Fatal(err)
+	}
+	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 100, 1)
+	insertAggregateMetric(t, db, measurementID, "effective_prefill_throughput", "tok/s", 200, 1)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +278,9 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 	// mean(123.4, 133.4) = 128.4, sample stddev = 7.071
 	if !strings.HasPrefix(combined.OutputTokS, "128.400 ±") {
 		t.Fatalf("aggregated output tok/s = %q, want mean ± spread", combined.OutputTokS)
+	}
+	if !strings.HasPrefix(combined.EffectivePrefillTokS, "150.000 ±") {
+		t.Fatalf("aggregated effective prefill = %q, want mean ± spread", combined.EffectivePrefillTokS)
 	}
 	if combined.CompletedRequests != 4 {
 		t.Fatalf("aggregated completed = %d, want summed 4", combined.CompletedRequests)
@@ -304,7 +312,7 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := out.String()
-	for _, want := range []string{"Repeats", "Per-repeat rows", "±", "&times;2"} {
+	for _, want := range []string{"Repeats", "Per-repeat rows", "Effective prefill tok/s", ">100.000</td>", ">200.000</td>", "±", "&times;2"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("HTML report missing %q", want)
 		}
