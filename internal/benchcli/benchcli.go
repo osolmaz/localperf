@@ -577,14 +577,6 @@ func usageRoot() {
   localperf view runs/model.sqlite [runs/other.sqlite ...] [--addr 127.0.0.1:0] [--open]`)
 }
 
-func exitOnError(err error) {
-	if err == nil {
-		return
-	}
-	fmt.Fprintln(os.Stderr, err)
-	os.Exit(1)
-}
-
 func addFilterFlags(flags *flag.FlagSet) *filterFlags {
 	out := &filterFlags{}
 	flags.Var(&out.profiles, "profile", "profile name to include; may be repeated")
