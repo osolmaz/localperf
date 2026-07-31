@@ -195,6 +195,7 @@ func (sample *RequestSample) applyTTFT(ttftSeconds float64) {
 	sample.FirstByteMillis = sample.TTFTMillis
 	firstByteAt := sample.StartedAt.Add(secondsDuration(ttftSeconds))
 	sample.FirstByteAt = &firstByteAt
+	sample.FirstTokenAt = &firstByteAt
 }
 
 func (sample *RequestSample) applyLatency(latencySeconds float64) {

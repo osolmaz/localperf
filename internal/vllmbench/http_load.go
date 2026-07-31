@@ -69,6 +69,7 @@ type RequestSample struct {
 	HTTPStatusCode        int            `json:"http_status_code,omitempty"`
 	StartedAt             time.Time      `json:"started_at"`
 	FirstByteAt           *time.Time     `json:"first_byte_at,omitempty"`
+	FirstTokenAt          *time.Time     `json:"first_token_at,omitempty"`
 	CompletedAt           *time.Time     `json:"completed_at,omitempty"`
 	LatencyMillis         float64        `json:"latency_ms,omitempty"`
 	FirstByteMillis       float64        `json:"first_byte_ms,omitempty"`
@@ -729,6 +730,7 @@ func (stream *httpStreamResult) applyToSample(sample RequestSample, request Cano
 	sample.Streamed = true
 	sample.CompletedAt = &stream.completedAt
 	sample.FirstByteAt = stream.firstByteAt
+	sample.FirstTokenAt = stream.firstTokenAt
 	sample.LatencyMillis = stream.completedAt.Sub(sample.StartedAt).Seconds() * 1000
 	if stream.firstByteAt != nil {
 		sample.FirstByteMillis = stream.firstByteAt.Sub(sample.StartedAt).Seconds() * 1000
