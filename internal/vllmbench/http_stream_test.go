@@ -94,6 +94,13 @@ func TestStreamingBenchmarkMeasuresTTFT(t *testing.T) {
 		if sample.TTFTMillis <= 0 || sample.TTFTMillis >= sample.LatencyMillis {
 			t.Fatalf("sample TTFT %.1fms outside (0, latency %.1fms)", sample.TTFTMillis, sample.LatencyMillis)
 		}
+		if sample.FirstTokenAt == nil {
+			t.Fatal("streamed sample is missing its observed first-token timestamp")
+		}
+		observedTTFT := sample.FirstTokenAt.Sub(sample.StartedAt).Seconds() * 1000
+		if !near(observedTTFT, sample.TTFTMillis) {
+			t.Fatalf("first-token timestamp implies %.3fms TTFT, recorded %.3fms", observedTTFT, sample.TTFTMillis)
+		}
 		if sample.ITLMeanMillis <= 0 {
 			t.Fatalf("sample ITL = %.3f, want positive from chunk gaps", sample.ITLMeanMillis)
 		}

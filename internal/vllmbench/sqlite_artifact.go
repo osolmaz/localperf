@@ -927,7 +927,8 @@ func validateStreamedTTFTEvidence(row ReportRow, samples []RequestSample) error 
 		if !sample.Streamed {
 			return fmt.Errorf("request %d belongs to a streamed-TTFT measurement but is not streamed", sample.RequestIndex)
 		}
-		if sample.FirstByteAt != nil && !sample.StartedAt.IsZero() && !sample.FirstByteAt.After(sample.StartedAt) {
+		firstTokenAt := requestFirstTokenAt(sample)
+		if firstTokenAt != nil && !sample.StartedAt.IsZero() && !firstTokenAt.After(sample.StartedAt) {
 			return fmt.Errorf("request %d has contradictory streamed-TTFT timestamps", sample.RequestIndex)
 		}
 	}
@@ -1067,8 +1068,9 @@ func measurementEffectivePrefillThroughput(samples []RequestSample) (float64, bo
 }
 
 func validEffectivePrefillSample(sample RequestSample) bool {
+	firstTokenAt := requestFirstTokenAt(sample)
 	return sample.Streamed && sample.PromptTokens > 0 && !sample.StartedAt.IsZero() &&
-		sample.FirstByteAt != nil && sample.FirstByteAt.After(sample.StartedAt)
+		firstTokenAt != nil && firstTokenAt.After(sample.StartedAt)
 }
 
 type effectivePrefillWindow struct {
@@ -1081,9 +1083,14 @@ func (window *effectivePrefillWindow) add(sample RequestSample) {
 	if window.earliestStart.IsZero() || sample.StartedAt.Before(window.earliestStart) {
 		window.earliestStart = sample.StartedAt
 	}
-	if window.latestToken.IsZero() || sample.FirstByteAt.After(window.latestToken) {
-		window.latestToken = *sample.FirstByteAt
+	firstTokenAt := requestFirstTokenAt(sample)
+	if window.latestToken.IsZero() || firstTokenAt.After(window.latestToken) {
+		window.latestToken = *firstTokenAt
 	}
+}
+
+func requestFirstTokenAt(sample RequestSample) *time.Time {
+	return sample.FirstTokenAt
 }
 
 func (window effectivePrefillWindow) throughput() (float64, bool) {
@@ -1148,7 +1155,7 @@ func streamedFirstTokenAt(sample RequestSample) *time.Time {
 	if !sample.Streamed {
 		return nil
 	}
-	return sample.FirstByteAt
+	return requestFirstTokenAt(sample)
 }
 
 func insertEvents(tx *sql.Tx, runID string, events []Event, phaseIDs, measurementIDs map[string]int64) error {

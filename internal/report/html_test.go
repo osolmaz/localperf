@@ -1119,6 +1119,20 @@ func TestGeneratedSpecTrimsRenderAsRows(t *testing.T) {
 	if len(trimmed) != 2 {
 		t.Fatalf("trimmed rows = %d, want 2 synthesized rows for c16", len(trimmed))
 	}
+	trimGroups := 0
+	for _, group := range doc.ThroughputGroups {
+		if group.ServerLimit != 65536 {
+			continue
+		}
+		trimGroups++
+		if len(group.Rows) != 1 || group.Rows[0].Concurrency != 16 ||
+			!group.Rows[0].DecodeDetail.Available || !group.Rows[0].PrefillDetail.Available {
+			t.Fatalf("trim markers did not stay paired: %+v", group)
+		}
+	}
+	if trimGroups != 1 {
+		t.Fatalf("trim markers split into %d context tables: %+v", trimGroups, doc.ThroughputGroups)
+	}
 	row := trimmed[0]
 	if row.Concurrency != 16 || row.ContextTarget != 65536 || !strings.Contains(row.FailureReason, "12 GiB KV budget") {
 		t.Fatalf("trimmed row = %+v, want c16 at 64k with the declared reason", row)

@@ -234,7 +234,7 @@ func compatibleBuilder(builders []*tableBuilder, row report.SQLiteReportThroughp
 			builder.claimKey != row.ClaimKey() {
 			continue
 		}
-		if row.Mode != "prefill" && builder.decodeWorkload != "" && builder.decodeWorkload != row.Workload {
+		if row.Mode != "prefill" && row.Workload != "" && builder.decodeWorkload != "" && builder.decodeWorkload != row.Workload {
 			continue
 		}
 		existing := builder.rows[row.Concurrency]

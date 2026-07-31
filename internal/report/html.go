@@ -2054,7 +2054,7 @@ func compatibleThroughputGroup(
 	source SQLiteReportThroughputRow,
 ) (int, bool) {
 	for _, index := range candidates {
-		if source.Mode != "prefill" && groups[index].DecodeWorkload != "" && groups[index].DecodeWorkload != source.Workload {
+		if source.Mode != "prefill" && source.Workload != "" && groups[index].DecodeWorkload != "" && groups[index].DecodeWorkload != source.Workload {
 			continue
 		}
 		rowIndex, exists := rowIndexes[index][source.Concurrency]

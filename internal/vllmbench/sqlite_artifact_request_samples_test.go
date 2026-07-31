@@ -174,12 +174,14 @@ func TestSQLiteArtifactStoresVLLMBenchStreamTimingProvenance(t *testing.T) {
 
 func TestMeasurementEffectivePrefillThroughput(t *testing.T) {
 	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	firstByte := start.Add(10 * time.Millisecond)
 	firstC1 := start.Add(200 * time.Millisecond)
 	if got, ok := measurementEffectivePrefillThroughput([]RequestSample{{
 		Status:       "completed",
 		Streamed:     true,
 		StartedAt:    start,
-		FirstByteAt:  &firstC1,
+		FirstByteAt:  &firstByte,
+		FirstTokenAt: &firstC1,
 		PromptTokens: 100,
 	}}); !ok || !near(got, 500) {
 		t.Fatalf("c1 effective prefill = %.3f/%t, want 500/true", got, ok)
@@ -188,8 +190,8 @@ func TestMeasurementEffectivePrefillThroughput(t *testing.T) {
 	firstA := start.Add(100 * time.Millisecond)
 	firstB := start.Add(300 * time.Millisecond)
 	got, ok := measurementEffectivePrefillThroughput([]RequestSample{
-		{Status: "completed", Streamed: true, StartedAt: start, FirstByteAt: &firstA, PromptTokens: 100},
-		{Status: "completed", Streamed: true, StartedAt: start.Add(50 * time.Millisecond), FirstByteAt: &firstB, PromptTokens: 200},
+		{Status: "completed", Streamed: true, StartedAt: start, FirstTokenAt: &firstA, PromptTokens: 100},
+		{Status: "completed", Streamed: true, StartedAt: start.Add(50 * time.Millisecond), FirstTokenAt: &firstB, PromptTokens: 200},
 	})
 	if !ok || !near(got, 1000) {
 		t.Fatalf("staggered batch effective prefill = %.3f/%t, want 1000/true", got, ok)
@@ -200,9 +202,9 @@ func TestMeasurementEffectivePrefillRequiresCompleteStreamEvidence(t *testing.T)
 	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	firstToken := start.Add(100 * time.Millisecond)
 	for name, sample := range map[string]RequestSample{
-		"non-streamed":  {Status: "completed", StartedAt: start, FirstByteAt: &firstToken, PromptTokens: 100},
+		"non-streamed":  {Status: "completed", StartedAt: start, FirstTokenAt: &firstToken, PromptTokens: 100},
 		"missing token": {Status: "completed", Streamed: true, StartedAt: start, PromptTokens: 100},
-		"missing count": {Status: "completed", Streamed: true, StartedAt: start, FirstByteAt: &firstToken},
+		"missing count": {Status: "completed", Streamed: true, StartedAt: start, FirstTokenAt: &firstToken},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got, ok := measurementEffectivePrefillThroughput([]RequestSample{sample}); ok || got != 0 {
@@ -220,7 +222,7 @@ func TestValidateStreamedTTFTEvidenceRejectsContradictorySample(t *testing.T) {
 		Status:       "completed",
 		Streamed:     true,
 		StartedAt:    start,
-		FirstByteAt:  &firstToken,
+		FirstTokenAt: &firstToken,
 		TTFTMillis:   100,
 		PromptTokens: 100,
 	}
@@ -228,7 +230,7 @@ func TestValidateStreamedTTFTEvidenceRejectsContradictorySample(t *testing.T) {
 		"non-streamed": func(sample *RequestSample) { sample.Streamed = false },
 		"reversed time": func(sample *RequestSample) {
 			first := sample.StartedAt.Add(-time.Millisecond)
-			sample.FirstByteAt = &first
+			sample.FirstTokenAt = &first
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -251,13 +253,16 @@ func TestValidateStreamedTTFTEvidenceAllowsMissingDerivedPrefillInputs(t *testin
 		Status:       "completed",
 		Streamed:     true,
 		StartedAt:    start,
-		FirstByteAt:  &firstToken,
+		FirstTokenAt: &firstToken,
 		TTFTMillis:   100,
 		PromptTokens: 100,
 	}
 	for name, mutate := range map[string]func(*RequestSample){
 		"missing start": func(sample *RequestSample) { sample.StartedAt = time.Time{} },
-		"missing token": func(sample *RequestSample) { sample.FirstByteAt = nil },
+		"missing token": func(sample *RequestSample) {
+			sample.FirstTokenAt = nil
+			sample.TTFTMillis = 0
+		},
 		"missing count": func(sample *RequestSample) { sample.PromptTokens = 0 },
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -95,6 +95,23 @@ func TestBuildKeepsDisjointDecodeWorkloadsSeparate(t *testing.T) {
 	}
 }
 
+func TestBuildKeepsSyntheticTrimWithDecodeWorkload(t *testing.T) {
+	measured := throughputRow("run-1", "64k", "64k capacity", 65536, 1)
+	measured.Workload = "generate-full"
+	measured.Status = "completed"
+	trimmed := throughputRow("", "64k", "64k capacity", 65536, 6)
+	trimmed.Workload = ""
+	trimmed.Status = "skipped"
+	trimmed.FailureLabel = "trimmed"
+	tables := Build("/tmp/report.sqlite", report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{measured, trimmed},
+	}).Throughput.Tables
+	if len(tables) != 1 || len(tables[0].Rows) != 2 || tables[0].DecodeWorkload != "generate-full" {
+		t.Fatalf("trim marker split from workload table: %+v", tables)
+	}
+}
+
 func TestBuildLabelsUnverifiedContext(t *testing.T) {
 	doc := report.SQLiteReportDocument{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
