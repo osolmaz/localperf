@@ -492,6 +492,9 @@ Recommended metric names:
 | `ttft` | `ms` | Time to first token. Written only when the measurement carries `{"ttft_source": "stream"}` in `measurements.metadata_json`; reports render TTFT solely from marked measurements, so a run without streamed samples has no TTFT rather than a first-byte approximation. |
 | `tpot` | `ms` | Time per output token. |
 | `itl` | `ms` | Inter-token latency. |
+| `effective_prefill_throughput` | `tok/s` | Prompt tokens across one concurrent batch divided by the time from its earliest request start to its latest first token. Written only for streamed measurements with complete request evidence. |
+| `request_effective_prefill_throughput` | `tok/s` | Per-request prompt tokens divided by streamed TTFT. |
+| `request_decode_throughput` | `tok/s` | Per-request decode speed calculated as 1,000 divided by TPOT in milliseconds. |
 | `output_throughput` | `tok/s` | Per-request output throughput distribution. |
 | `total_throughput` | `tok/s` | Per-request total-token throughput distribution. |
 | `mem_available` | `bytes` | Distribution of observed system available memory. |
@@ -510,7 +513,11 @@ INSERT INTO metric_stats (
 ```
 
 For token throughput variance, store one `measurements` row per repeat and
-calculate cross-repeat stats in reports.
+calculate cross-repeat stats in reports. The report keeps effective prefill,
+TPOT-derived decode speed, and end-to-end output throughput separate.
+
+For streamed requests, `requests.first_token_at` stores the same observed
+time as `first_byte_at`. Non-streamed requests leave `first_token_at` empty.
 
 ## Telemetry Names
 

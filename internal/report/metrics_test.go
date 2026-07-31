@@ -166,6 +166,71 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 	}
 }
 
+func TestFullRunTimingReportsEffectivePrefillAndDecode(t *testing.T) {
+	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
+	createTestSQLiteHTMLArtifact(t, artifactPath, "Full Run Timing")
+	db, err := sql.Open("sqlite", artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE workloads SET name = 'generate-full', phase = 'decode' WHERE id = 'workload-1'`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}' WHERE id = 1`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 1)
+	insertAggregateMetric(t, db, 1, "request_effective_prefill_throughput", "tok/s", 1500, 2)
+	insertAggregateMetric(t, db, 1, "request_decode_throughput", "tok/s", 40, 2)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := LoadSQLiteReport(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.FullRunTimingRows) != 1 {
+		t.Fatalf("full-run timing rows = %d, want 1", len(doc.FullRunTimingRows))
+	}
+	row := doc.FullRunTimingRows[0]
+	if row.EffectivePrefillTokS != "1764.000" || row.RequestEffectivePrefillTokS != "1500.000" || row.DecodePerUserTokS != "40.000" {
+		t.Fatalf("full-run timing metrics = %q/%q/%q, want 1764/1500/40", row.EffectivePrefillTokS, row.RequestEffectivePrefillTokS, row.DecodePerUserTokS)
+	}
+	var out strings.Builder
+	if err := RenderHTMLReport(&out, doc, HTMLReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Full-run timing", "Effective prefill tok/s", "Effective prefill/user", "Decode/user", ">1764<", ">1500<", ">40.0<"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("HTML report missing %q", want)
+		}
+	}
+}
+
+func TestEffectivePrefillHiddenWithoutStreamedSource(t *testing.T) {
+	artifactPath := testSQLiteHTMLArtifact(t, "EffectivePrefillGate")
+	db, err := sql.Open("sqlite", artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 1)
+	insertAggregateMetric(t, db, 1, "request_effective_prefill_throughput", "tok/s", 1500, 2)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := LoadSQLiteReport(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurement := doc.Measurements[0]
+	if measurement.EffectivePrefillTokS != "-" || measurement.RequestEffectivePrefillTokS != "-" {
+		t.Fatalf("effective prefill = %q/%q, want hidden without streamed source", measurement.EffectivePrefillTokS, measurement.RequestEffectivePrefillTokS)
+	}
+}
+
 func TestTTFTHiddenWithoutStreamedSource(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
 	// The fixture seeds request_ttft stats but no ttft_source marker, so the

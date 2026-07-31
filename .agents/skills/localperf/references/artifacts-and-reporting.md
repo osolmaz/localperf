@@ -309,6 +309,16 @@ Do not describe aggregate cN throughput as single-user generation speed.
 TPOT and ITL use different weighting and are not interchangeable. A first byte
 without a token event is not TTFT.
 
+For a streamed full generation run, report effective prefill from the saved
+request evidence. Per-request effective prefill is prompt tokens divided by
+TTFT. Aggregate effective prefill is all prompt tokens in the concurrent batch
+divided by the time from the earliest request start to the latest first token.
+This includes queueing, scheduling, API overhead, and overlapping decode work.
+Keep it separate from isolated prefill-only throughput.
+
+Report per-request decode speed as 1,000 divided by TPOT in milliseconds. Keep
+that value separate from end-to-end output throughput, which includes TTFT.
+
 ### Goodput
 
 Goodput appears only when a workload declares an SLO. It is the number of

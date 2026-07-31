@@ -786,6 +786,7 @@ func insertMeasurements(tx *sql.Tx, runID, runDir string, plan []PlannedRun, eve
 	for _, planned := range plan {
 		key := measurementKey(planned.Profile.Name, planned.Workload.Name, planned.Concurrency, planned.Repeat)
 		row := reportRows[key]
+		applyWorkloadFields(&row, planned.Workload)
 		startedAt, completedAt := measurementTimes(events, planned)
 		id, err := insertMeasurement(tx, measurementInsert{
 			runID:       runID,
@@ -870,12 +871,12 @@ func measurementResultFile(events []Event, planned PlannedRun) string {
 }
 
 func insertMeasurementDetails(tx *sql.Tx, runDir string, measurementID int64, row ReportRow, resultFile string) error {
-	samples, err := requestSamplesForResult(runDir, resultFile)
+	samples, err := measurementRequestSamples(runDir, resultFile)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		samples = nil
+		return err
+	}
+	if err := validateStreamedTTFTEvidence(row, samples); err != nil {
+		return err
 	}
 	if err := insertRequestSamples(tx, measurementID, samples); err != nil {
 		return err
@@ -883,11 +884,43 @@ func insertMeasurementDetails(tx *sql.Tx, runDir string, measurementID int64, ro
 	return insertMetricStats(tx, measurementID, row, samples)
 }
 
+func measurementRequestSamples(runDir, resultFile string) ([]RequestSample, error) {
+	samples, err := requestSamplesForResult(runDir, resultFile)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return samples, err
+}
+
+func validateStreamedTTFTEvidence(row ReportRow, samples []RequestSample) error {
+	if row.TTFTSource != TTFTSourceStream {
+		return nil
+	}
+	for _, sample := range samples {
+		if sample.Status == "completed" && sample.TTFTMillis > 0 && !sample.Streamed {
+			return fmt.Errorf("request %d has TTFT but is not streamed", sample.RequestIndex)
+		}
+	}
+	return nil
+}
+
 func insertMetricStats(tx *sql.Tx, measurementID int64, row ReportRow, samples []RequestSample) error {
 	if err := insertAggregateMetricStats(tx, measurementID, row); err != nil {
 		return err
 	}
-	return insertSampleMetricStats(tx, measurementID, samples)
+	if row.TTFTSource == TTFTSourceStream {
+		if value, ok := measurementEffectivePrefillThroughput(samples); ok {
+			if err := insertAggregateMetricStat(tx, measurementID, aggregateMetricStat{
+				metric: "effective_prefill_throughput",
+				unit:   "tok/s",
+				mean:   value,
+				count:  1,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return insertSampleMetricStats(tx, measurementID, row, samples)
 }
 
 type aggregateMetricStat struct {
@@ -936,8 +969,8 @@ func insertAggregateMetricStat(tx *sql.Tx, measurementID int64, stat aggregateMe
 	return err
 }
 
-func insertSampleMetricStats(tx *sql.Tx, measurementID int64, samples []RequestSample) error {
-	for _, distribution := range sampleMetricDistributions(samples) {
+func insertSampleMetricStats(tx *sql.Tx, measurementID int64, row ReportRow, samples []RequestSample) error {
+	for _, distribution := range sampleMetricDistributions(row, samples) {
 		if distribution.stats.Count == 0 {
 			continue
 		}
@@ -954,16 +987,81 @@ type sampleMetricDistribution struct {
 	stats  numericStats
 }
 
-func sampleMetricDistributions(samples []RequestSample) []sampleMetricDistribution {
-	return []sampleMetricDistribution{
+func sampleMetricDistributions(row ReportRow, samples []RequestSample) []sampleMetricDistribution {
+	distributions := []sampleMetricDistribution{
 		{"request_output_throughput", "tok/s", statsFromSamples(samples, true, func(sample RequestSample) float64 { return sample.OutputTokensPerSecond })},
 		{"request_total_throughput", "tok/s", statsFromSamples(samples, true, func(sample RequestSample) float64 { return sample.TotalTokensPerSecond })},
+		{"request_decode_throughput", "tok/s", statsFromSamples(samples, false, requestDecodeThroughput)},
 		{"latency", "ms", statsFromSamples(samples, false, func(sample RequestSample) float64 { return sample.LatencyMillis })},
 		{"first_byte", "ms", statsFromSamples(samples, false, func(sample RequestSample) float64 { return sample.FirstByteMillis })},
 		{"request_ttft", "ms", statsFromSamples(samples, false, streamedTTFT)},
 		{"request_tpot", "ms", statsFromSamples(samples, false, func(sample RequestSample) float64 { return sample.TPOTMillis })},
 		{"request_itl_mean", "ms", statsFromSamples(samples, false, func(sample RequestSample) float64 { return sample.ITLMeanMillis })},
 	}
+	if row.TTFTSource == TTFTSourceStream {
+		distributions = append(distributions, sampleMetricDistribution{
+			"request_effective_prefill_throughput",
+			"tok/s",
+			statsFromSamples(samples, false, requestEffectivePrefillThroughput),
+		})
+	}
+	return distributions
+}
+
+func requestEffectivePrefillThroughput(sample RequestSample) float64 {
+	if !sample.Streamed || sample.PromptTokens <= 0 || sample.TTFTMillis <= 0 {
+		return 0
+	}
+	return float64(sample.PromptTokens) / (sample.TTFTMillis / 1000)
+}
+
+func requestDecodeThroughput(sample RequestSample) float64 {
+	if sample.TPOTMillis <= 0 {
+		return 0
+	}
+	return 1000 / sample.TPOTMillis
+}
+
+func measurementEffectivePrefillThroughput(samples []RequestSample) (float64, bool) {
+	var window effectivePrefillWindow
+	for _, sample := range samples {
+		if sample.Status != "completed" {
+			continue
+		}
+		if !validEffectivePrefillSample(sample) {
+			return 0, false
+		}
+		window.add(sample)
+	}
+	return window.throughput()
+}
+
+func validEffectivePrefillSample(sample RequestSample) bool {
+	return sample.Streamed && sample.PromptTokens > 0 && !sample.StartedAt.IsZero() &&
+		sample.FirstByteAt != nil && sample.FirstByteAt.After(sample.StartedAt)
+}
+
+type effectivePrefillWindow struct {
+	promptTokens               int
+	earliestStart, latestToken time.Time
+}
+
+func (window *effectivePrefillWindow) add(sample RequestSample) {
+	window.promptTokens += sample.PromptTokens
+	if window.earliestStart.IsZero() || sample.StartedAt.Before(window.earliestStart) {
+		window.earliestStart = sample.StartedAt
+	}
+	if window.latestToken.IsZero() || sample.FirstByteAt.After(window.latestToken) {
+		window.latestToken = *sample.FirstByteAt
+	}
+}
+
+func (window effectivePrefillWindow) throughput() (float64, bool) {
+	span := window.latestToken.Sub(window.earliestStart)
+	if window.promptTokens <= 0 || span <= 0 {
+		return 0, false
+	}
+	return float64(window.promptTokens) / span.Seconds(), true
 }
 
 func insertMetricDistribution(tx *sql.Tx, measurementID int64, metric, unit string, stats numericStats) error {
@@ -1000,9 +1098,9 @@ func insertRequestSamples(tx *sql.Tx, measurementID int64, samples []RequestSamp
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			measurementID, sample.RequestIndex, nullString(sample.RequestID),
 			firstNonEmpty(sample.Status, "failed"), boolToInt(sample.Streamed),
-			intNull(sample.HTTPStatusCode), sample.StartedAt.Format(time.RFC3339),
+			intNull(sample.HTTPStatusCode), sample.StartedAt.Format(time.RFC3339Nano),
 			timePtrString(sample.FirstByteAt), floatNull(sample.FirstByteMillis),
-			nil, timePtrString(sample.CompletedAt), floatNull(sample.LatencyMillis),
+			timePtrString(streamedFirstTokenAt(sample)), timePtrString(sample.CompletedAt), floatNull(sample.LatencyMillis),
 			floatNull(sample.TTFTMillis), floatNull(sample.TPOTMillis), floatNull(sample.ITLMeanMillis),
 			knownIntNull(completedSample, sample.PromptTokens), knownIntNull(completedSample, sample.CompletionTokens),
 			knownIntNull(completedSample, sample.TotalTokens), knownFloatNull(completedSample, sample.OutputTokensPerSecond),
@@ -1014,6 +1112,13 @@ func insertRequestSamples(tx *sql.Tx, measurementID int64, samples []RequestSamp
 		}
 	}
 	return nil
+}
+
+func streamedFirstTokenAt(sample RequestSample) *time.Time {
+	if !sample.Streamed {
+		return nil
+	}
+	return sample.FirstByteAt
 }
 
 func insertEvents(tx *sql.Tx, runID string, events []Event, phaseIDs, measurementIDs map[string]int64) error {
@@ -1419,7 +1524,7 @@ func timePtrString(value *time.Time) any {
 	if value == nil || value.IsZero() {
 		return nil
 	}
-	return value.UTC().Format(time.RFC3339)
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func durationMillis(start, end *time.Time) any {

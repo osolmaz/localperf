@@ -30,6 +30,18 @@ var ReportMetrics = []MetricDef{
 		Definition: "input prompt tokens divided by full run wall time; a workload-level approximation, not engine kernel time.",
 	},
 	{
+		Key: "effective_prefill_tok_s", Label: "effective prefill tok/s", Unit: "tok/s", Weighting: "aggregate",
+		Definition: "prompt tokens across one concurrent batch divided by the time from the earliest request start to the latest first token. Includes queueing, scheduling, API overhead, and overlapping decode work.",
+	},
+	{
+		Key: "effective_prefill_user_tok_s", Label: "effective prefill/user", Unit: "tok/s", Weighting: "per-request",
+		Definition: "each request's prompt tokens divided by its streamed TTFT, summarized across completed requests.",
+	},
+	{
+		Key: "decode_user_tok_s", Label: "decode/user", Unit: "tok/s", Weighting: "per-request",
+		Definition: "1000 divided by each request's TPOT in milliseconds, summarized across completed requests.",
+	},
+	{
 		Key: "per_user_tok_s", Label: "/user", Unit: "tok/s", Weighting: "per-request",
 		Definition: "row throughput divided by concurrent users.",
 	},
@@ -519,6 +531,9 @@ func combineRepeats(members []SQLiteReportMeasurement) SQLiteReportMeasurement {
 		{func(m SQLiteReportMeasurement) string { return m.LatencyP95MS }, func(m *SQLiteReportMeasurement, v string) { m.LatencyP95MS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.LatencyP99MS }, func(m *SQLiteReportMeasurement, v string) { m.LatencyP99MS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.TPOTMeanMS }, func(m *SQLiteReportMeasurement, v string) { m.TPOTMeanMS = v }},
+		{func(m SQLiteReportMeasurement) string { return m.DecodePerUserTokS }, func(m *SQLiteReportMeasurement, v string) { m.DecodePerUserTokS = v }},
+		{func(m SQLiteReportMeasurement) string { return m.EffectivePrefillTokS }, func(m *SQLiteReportMeasurement, v string) { m.EffectivePrefillTokS = v }},
+		{func(m SQLiteReportMeasurement) string { return m.RequestEffectivePrefillTokS }, func(m *SQLiteReportMeasurement, v string) { m.RequestEffectivePrefillTokS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.ITLMeanMS }, func(m *SQLiteReportMeasurement, v string) { m.ITLMeanMS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.ITLTokenWeightedMS }, func(m *SQLiteReportMeasurement, v string) { m.ITLTokenWeightedMS = v }},
 	}
