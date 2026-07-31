@@ -407,9 +407,9 @@ func TestThroughputMode(t *testing.T) {
 
 func TestApplyThroughputComparisonHeatmapColumn(t *testing.T) {
 	rows := []SQLiteReportThroughputComparisonRow{
-		{DecodeTokS: "100"},
+		{DecodeTokS: "100 ± 10"},
 		{DecodeTokS: "-"},
-		{DecodeTokS: "300"},
+		{DecodeTokS: "300 ± 20"},
 	}
 	applyThroughputComparisonHeatmapColumn(rows, throughputComparisonHeatmapColumn{
 		higherIsBetter: true,
@@ -435,6 +435,14 @@ func TestApplyThroughputComparisonHeatmapColumn(t *testing.T) {
 	})
 	if rows[0].DecodeTTFTHeat != "heat-5" || rows[1].DecodeTTFTHeat != "heat-neutral" || rows[2].DecodeTTFTHeat != "heat-0" {
 		t.Fatalf("lower-is-better heat classes = %#v", rows)
+	}
+}
+
+func TestDerivedPrefillDetailPreservesRepeatSource(t *testing.T) {
+	detail := derivedPrefillDetail(SQLiteReportCellDetail{Source: "aggregate of 3 repeats"})
+	if !strings.Contains(detail.Source, "aggregate of 3 repeats") ||
+		!strings.Contains(detail.Source, "generation-derived from streamed TTFT") {
+		t.Fatalf("derived source = %q, want repeat and derivation provenance", detail.Source)
 	}
 }
 

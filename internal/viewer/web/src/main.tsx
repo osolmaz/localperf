@@ -105,6 +105,7 @@ type CellDetail = {
   status: string;
   failure_label?: string;
   failure_reason?: string;
+  source?: string;
   run_id?: string;
   measurement_id: number;
   model?: string;
@@ -459,6 +460,7 @@ function DetailBody({ detail, metric }: { detail: LoadState<CellDetail> | null; 
       { label: "Prefill source", value: metric.derived_source || "generation-derived from streamed TTFT" },
       { label: "Prefill formula", value: metric.derived_formula || "-" },
     ] : []),
+    ...(value.source ? [{ label: "Source", value: value.source }] : []),
     { label: "Model", value: value.model || "-" },
     { label: "Profile", value: value.profile || "-" },
     { label: "Workload", value: value.workload || "-" },
