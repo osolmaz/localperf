@@ -93,6 +93,9 @@ type PhaseMetrics = {
   err: number;
   failure_label?: string;
   failure_reason?: string;
+  derived?: boolean;
+  derived_source?: string;
+  derived_formula?: string;
 };
 
 type CellDetail = {
@@ -451,7 +454,11 @@ function DetailBody({ detail, metric }: { detail: LoadState<CellDetail> | null; 
   const value = detail.value;
   const pairs: MetadataItem[] = [
     { label: "Status", value: value.status || metric.status || "-" },
-    { label: "Phase", value: value.phase || metric.workload || "-" },
+    { label: "Phase", value: metric.derived ? "Prefill (generation-derived)" : value.phase || metric.workload || "-" },
+    ...(metric.derived ? [
+      { label: "Prefill source", value: metric.derived_source || "generation-derived from streamed TTFT" },
+      { label: "Prefill formula", value: metric.derived_formula || "-" },
+    ] : []),
     { label: "Model", value: value.model || "-" },
     { label: "Profile", value: value.profile || "-" },
     { label: "Workload", value: value.workload || "-" },

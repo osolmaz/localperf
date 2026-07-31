@@ -203,6 +203,9 @@ func TestGenerationEffectivePrefillUsesHistoricalViewerColumns(t *testing.T) {
 	if got.Prefill.TTFTMeanDisplay != "2m12s ± 3.7s" || got.Prefill.TTFTP99Display != "3m42s ± 3.5s" {
 		t.Fatalf("prefill TTFT = %q/%q", got.Prefill.TTFTMeanDisplay, got.Prefill.TTFTP99Display)
 	}
+	if !strings.Contains(got.Prefill.DerivedSource, "streamed TTFT") || !strings.Contains(got.Prefill.DerivedFormula, "sum(prompt tokens)") {
+		t.Fatalf("derived prefill provenance = %+v", got.Prefill)
+	}
 	if got.OK != 18 || got.Result != "18 / 0" {
 		t.Fatalf("derived prefill result = %+v", got)
 	}
