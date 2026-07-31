@@ -82,6 +82,11 @@ func withSQLiteTx(db *sql.DB, run func(*sql.Tx) error) error {
 func writeSQLiteRun(tx *sql.Tx, runDir string, spec Spec, summary RunSummary, plan []PlannedRun, originalSpecPath string) error {
 	now := time.Now().UTC()
 	runID := sqliteRunID(runDir, spec)
+	events, err := readEvents(filepath.Join(runDir, "events.jsonl"))
+	if err != nil {
+		return fmt.Errorf("read run events: %w", err)
+	}
+	summary = applyRecordedRunTimes(summary, events)
 	if err := insertRunMetadata(tx, now); err != nil {
 		return err
 	}
@@ -94,7 +99,7 @@ func writeSQLiteRun(tx *sql.Tx, runDir string, spec Spec, summary RunSummary, pl
 	if err := insertRunSpecs(tx, runID, runDir, spec, originalSpecPath, now); err != nil {
 		return err
 	}
-	return insertRunData(tx, runID, runDir, spec, summary, plan, now)
+	return insertRunData(tx, runID, runDir, spec, summary, plan, events, now)
 }
 
 func sqliteRunID(runDir string, spec Spec) string {
@@ -180,6 +185,29 @@ func insertRunRow(tx *sql.Tx, runID, runDir string, spec Spec, summary RunSummar
 	return err
 }
 
+func applyRecordedRunTimes(summary RunSummary, events []Event) RunSummary {
+	var startedAt, finishedAt time.Time
+	for _, event := range events {
+		switch event.Type {
+		case "run_start":
+			if startedAt.IsZero() {
+				startedAt = event.Timestamp
+			}
+		case "run_finish":
+			if finishedAt.IsZero() {
+				finishedAt = event.Timestamp
+			}
+		}
+	}
+	if !startedAt.IsZero() {
+		summary.StartedAt = startedAt
+	}
+	if !finishedAt.IsZero() {
+		summary.FinishedAt = finishedAt
+	}
+	return summary
+}
+
 func runStatus(summary RunSummary) string {
 	// Incremental snapshots record the run as still in flight.
 	if summary.InProgress {
@@ -224,13 +252,9 @@ func insertRunSpecs(tx *sql.Tx, runID, runDir string, spec Spec, originalSpecPat
 	return insertSpec(tx, runID, "normalized", normalizedData, now)
 }
 
-func insertRunData(tx *sql.Tx, runID, runDir string, spec Spec, _ RunSummary, plan []PlannedRun, now time.Time) error {
+func insertRunData(tx *sql.Tx, runID, runDir string, spec Spec, _ RunSummary, plan []PlannedRun, events []Event, now time.Time) error {
 	if err := insertRunDimensions(tx, runID, runDir, spec); err != nil {
 		return err
-	}
-	events, err := readEvents(filepath.Join(runDir, "events.jsonl"))
-	if err != nil {
-		return fmt.Errorf("read run events: %w", err)
 	}
 	return insertRunExecutionData(tx, runID, runDir, spec, plan, events, now)
 }
@@ -833,7 +857,7 @@ func insertMeasurement(tx *sql.Tx, insert measurementInsert) (int64, error) {
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		insert.runID, dimensionID(insert.runID, insert.planned.Profile.Name), dimensionID(insert.runID, insert.planned.Workload.Name), zeroNullInt(insert.phaseID),
 		insert.planned.Repeat, insert.planned.Concurrency, resolvedNumPrompts(insert.planned.Workload, insert.planned.Concurrency), insert.status,
-		timePtrString(insert.startedAt), timePtrString(insert.completedAt), durationMillis(insert.startedAt, insert.completedAt),
+		timePtrString(insert.startedAt), timePtrString(insert.completedAt), measurementWallTimeMillis(insert.row, insert.startedAt, insert.completedAt),
 		insert.row.Completed, insert.row.Failed, knownIntNull(insert.row.promptTokensKnown, insert.row.PromptTokens),
 		knownIntNull(insert.row.completionTokensKnown, insert.row.CompletionTokens), knownIntNull(insert.row.totalTokensKnown, insert.row.TotalTokens),
 		knownFloatNull(insert.row.outputTokensPerSecKnown, insert.row.OutputTokensPerSec),
@@ -1428,21 +1452,39 @@ func measurementError(events []Event, planned PlannedRun) any {
 }
 
 func measurementTimes(events []Event, planned PlannedRun) (*time.Time, *time.Time) {
+	start, end := executedMeasurementTimes(events, planned)
+	if end != nil {
+		return start, end
+	}
+	return nil, resumedMeasurementEnd(events, planned)
+}
+
+func executedMeasurementTimes(events []Event, planned PlannedRun) (*time.Time, *time.Time) {
 	var start, end *time.Time
 	for _, event := range events {
 		if !eventMatchesPlanned(event, planned) {
 			continue
 		}
-		if event.Type == "workload_start" {
+		switch event.Type {
+		case "workload_start":
 			t := event.Timestamp
 			start = &t
-		}
-		if event.Type == "workload_finish" || event.Type == "workload_failed" || event.Type == "workload_skipped" || event.Type == "workload_resumed" {
+		case "workload_finish", "workload_failed", "workload_skipped":
 			t := event.Timestamp
 			end = &t
 		}
 	}
 	return start, end
+}
+
+func resumedMeasurementEnd(events []Event, planned PlannedRun) *time.Time {
+	for _, event := range events {
+		if eventMatchesPlanned(event, planned) && event.Type == "workload_resumed" {
+			t := event.Timestamp
+			return &t
+		}
+	}
+	return nil
 }
 
 func eventMatchesPlanned(event Event, planned PlannedRun) bool {
@@ -1525,6 +1567,13 @@ func timePtrString(value *time.Time) any {
 		return nil
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func measurementWallTimeMillis(row ReportRow, start, end *time.Time) any {
+	if row.DurationSeconds > 0 {
+		return row.DurationSeconds * 1000
+	}
+	return durationMillis(start, end)
 }
 
 func durationMillis(start, end *time.Time) any {

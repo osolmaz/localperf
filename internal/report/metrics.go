@@ -22,8 +22,8 @@ type MetricDef struct {
 
 var ReportMetrics = []MetricDef{
 	{
-		Key: "decode_tok_s", Label: "decode tok/s", Unit: "tok/s", Weighting: "aggregate",
-		Definition: "generated output tokens divided by full run wall time.",
+		Key: "output_tok_s", Label: "end-to-end output tok/s", Unit: "tok/s", Weighting: "aggregate",
+		Definition: "generated output tokens divided by the complete benchmark duration, including TTFT and generation.",
 	},
 	{
 		Key: "prefill_tok_s", Label: "prefill tok/s", Unit: "tok/s", Weighting: "aggregate",
@@ -35,15 +35,15 @@ var ReportMetrics = []MetricDef{
 	},
 	{
 		Key: "effective_prefill_user_tok_s", Label: "effective prefill/user", Unit: "tok/s", Weighting: "per-request",
-		Definition: "each request's prompt tokens divided by its streamed TTFT, summarized across completed requests.",
+		Definition: "each request's prompt tokens divided by its streamed TTFT. Full-run tables show both the request mean and p50.",
 	},
 	{
-		Key: "decode_user_tok_s", Label: "decode/user", Unit: "tok/s", Weighting: "per-request",
-		Definition: "1000 divided by each request's TPOT in milliseconds, summarized across completed requests.",
+		Key: "post_first_token_user_tok_s", Label: "post-first-token/user", Unit: "tok/s", Weighting: "per-request",
+		Definition: "1000 divided by each request's TPOT in milliseconds. Full-run tables show both the request mean and p50.",
 	},
 	{
-		Key: "per_user_tok_s", Label: "/user", Unit: "tok/s", Weighting: "per-request",
-		Definition: "row throughput divided by concurrent users.",
+		Key: "output_share_user_tok_s", Label: "output share/user", Unit: "tok/s", Weighting: "aggregate share",
+		Definition: "aggregate end-to-end output throughput divided by configured concurrency. This is not post-first-token generation speed.",
 	},
 	{
 		Key: "rps", Label: "RPS", Unit: "req/s", Weighting: "aggregate",
@@ -532,8 +532,10 @@ func combineRepeats(members []SQLiteReportMeasurement) SQLiteReportMeasurement {
 		{func(m SQLiteReportMeasurement) string { return m.LatencyP99MS }, func(m *SQLiteReportMeasurement, v string) { m.LatencyP99MS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.TPOTMeanMS }, func(m *SQLiteReportMeasurement, v string) { m.TPOTMeanMS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.DecodePerUserTokS }, func(m *SQLiteReportMeasurement, v string) { m.DecodePerUserTokS = v }},
+		{func(m SQLiteReportMeasurement) string { return m.DecodePerUserP50TokS }, func(m *SQLiteReportMeasurement, v string) { m.DecodePerUserP50TokS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.EffectivePrefillTokS }, func(m *SQLiteReportMeasurement, v string) { m.EffectivePrefillTokS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.RequestEffectivePrefillTokS }, func(m *SQLiteReportMeasurement, v string) { m.RequestEffectivePrefillTokS = v }},
+		{func(m SQLiteReportMeasurement) string { return m.RequestEffectivePrefillP50TokS }, func(m *SQLiteReportMeasurement, v string) { m.RequestEffectivePrefillP50TokS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.ITLMeanMS }, func(m *SQLiteReportMeasurement, v string) { m.ITLMeanMS = v }},
 		{func(m SQLiteReportMeasurement) string { return m.ITLTokenWeightedMS }, func(m *SQLiteReportMeasurement, v string) { m.ITLTokenWeightedMS = v }},
 	}

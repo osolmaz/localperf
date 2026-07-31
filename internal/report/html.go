@@ -89,7 +89,8 @@ type SQLiteReportEngine struct {
 	// ServedModelsByProfile lists every model the server reported per
 	// probed profile, from the engine identity stored under
 	// metadata_json.identity. Multi-model servers report all of them.
-	ServedModelsByProfile map[string][]string
+	ServedModelsByProfile  map[string][]string
+	QuantizationsByProfile map[string][]string
 }
 
 type SQLiteReportProfile struct {
@@ -124,86 +125,88 @@ type SQLiteReportWorkload struct {
 }
 
 type SQLiteReportMeasurement struct {
-	ID                          int64
-	RunID                       string
-	ProfileID                   string
-	Profile                     string
-	Model                       string
-	WorkloadID                  string
-	Workload                    string
-	Phase                       string
-	ContextWindow               int
-	ContextTarget               int
-	ContextSemantics            string
-	ContextLabel                string
-	ContextSortKey              int
-	ContextMismatch             bool
-	ContextMismatchNote         string
-	ActiveRange                 string
-	RepeatIndex                 int
-	Concurrency                 int
-	SamplesRequested            int
-	Status                      string
-	StartedAt                   string
-	CompletedAt                 string
-	WallTimeMS                  string
-	WallTimeMSValue             float64
-	WallTimeMSKnown             bool
-	CompletedRequests           int
-	FailedRequests              int
-	PromptTokens                string
-	PromptTokensValue           int64
-	PromptTokensKnown           bool
-	CompletionTokens            string
-	CompletionTokensValue       int64
-	CompletionTokensKnown       bool
-	TotalTokens                 string
-	TotalTokensValue            int64
-	TotalTokensKnown            bool
-	OutputTokS                  string
-	OutputTokSValue             float64
-	OutputTokSKnown             bool
-	OutputTokSStdDev            string
-	PerUserOutputTokS           string
-	TotalTokS                   string
-	InputTokSSpread             string
-	InputPerUserSpread          string
-	RPS                         string
-	LatencyMeanMS               string
-	LatencyP50MS                string
-	LatencyP95MS                string
-	LatencyP99MS                string
-	TTFTMeanMS                  string
-	TTFTP50MS                   string
-	TTFTP95MS                   string
-	TTFTP99MS                   string
-	TPOTMeanMS                  string
-	DecodePerUserTokS           string
-	EffectivePrefillTokS        string
-	RequestEffectivePrefillTokS string
-	ITLMeanMS                   string
-	ITLTokenWeightedMS          string
-	AchievedConcurrency         string
-	AchievedValue               float64
-	AchievedKnown               bool
-	FailureBreakdown            string
-	FailureCounts               map[string]int
-	GPUUtil                     string
-	GPUUtilBySource             map[string]GPUUtilStat
-	GPUMemPeak                  string
-	GPUMemPeakBySource          map[string]float64
-	SLOTTFTMillis               float64
-	SLOE2ELMillis               float64
-	SLONote                     string
-	SLOMetPct                   string
-	SLOMetCount                 int64
-	SLORequestCount             int64
-	GoodputRPS                  string
-	RepeatCount                 int
-	ContextVerified             bool
-	TTFTSource                  string
-	ErrorType                   string
-	ErrorMessage                string
+	ID                             int64
+	RunID                          string
+	ProfileID                      string
+	Profile                        string
+	Model                          string
+	WorkloadID                     string
+	Workload                       string
+	Phase                          string
+	ContextWindow                  int
+	ContextTarget                  int
+	ContextSemantics               string
+	ContextLabel                   string
+	ContextSortKey                 int
+	ContextMismatch                bool
+	ContextMismatchNote            string
+	ActiveRange                    string
+	RepeatIndex                    int
+	Concurrency                    int
+	SamplesRequested               int
+	Status                         string
+	StartedAt                      string
+	CompletedAt                    string
+	WallTimeMS                     string
+	WallTimeMSValue                float64
+	WallTimeMSKnown                bool
+	CompletedRequests              int
+	FailedRequests                 int
+	PromptTokens                   string
+	PromptTokensValue              int64
+	PromptTokensKnown              bool
+	CompletionTokens               string
+	CompletionTokensValue          int64
+	CompletionTokensKnown          bool
+	TotalTokens                    string
+	TotalTokensValue               int64
+	TotalTokensKnown               bool
+	OutputTokS                     string
+	OutputTokSValue                float64
+	OutputTokSKnown                bool
+	OutputTokSStdDev               string
+	PerUserOutputTokS              string
+	TotalTokS                      string
+	InputTokSSpread                string
+	InputPerUserSpread             string
+	RPS                            string
+	LatencyMeanMS                  string
+	LatencyP50MS                   string
+	LatencyP95MS                   string
+	LatencyP99MS                   string
+	TTFTMeanMS                     string
+	TTFTP50MS                      string
+	TTFTP95MS                      string
+	TTFTP99MS                      string
+	TPOTMeanMS                     string
+	DecodePerUserTokS              string
+	DecodePerUserP50TokS           string
+	EffectivePrefillTokS           string
+	RequestEffectivePrefillTokS    string
+	RequestEffectivePrefillP50TokS string
+	ITLMeanMS                      string
+	ITLTokenWeightedMS             string
+	AchievedConcurrency            string
+	AchievedValue                  float64
+	AchievedKnown                  bool
+	FailureBreakdown               string
+	FailureCounts                  map[string]int
+	GPUUtil                        string
+	GPUUtilBySource                map[string]GPUUtilStat
+	GPUMemPeak                     string
+	GPUMemPeakBySource             map[string]float64
+	SLOTTFTMillis                  float64
+	SLOE2ELMillis                  float64
+	SLONote                        string
+	SLOMetPct                      string
+	SLOMetCount                    int64
+	SLORequestCount                int64
+	GoodputRPS                     string
+	RepeatCount                    int
+	ContextVerified                bool
+	TTFTSource                     string
+	ErrorType                      string
+	ErrorMessage                   string
 }
 
 type SQLiteReportMetadataItem struct {
@@ -265,28 +268,33 @@ type SQLiteReportThroughputGroup struct {
 	Profile        string
 	ContextSortKey int
 	ServerLimit    int
+	HasDecode      bool
+	HasPrefill     bool
 	AxisItems      []SQLiteReportMetadataItem
 	Rows           []SQLiteReportThroughputComparisonRow
 }
 
 type SQLiteReportFullRunTimingRow struct {
-	MeasurementID               int64
-	Profile                     string
-	Workload                    string
-	ContextLabel                string
-	ContextSortKey              int
-	Concurrency                 int
-	RepeatCount                 int
-	OutputTokS                  string
-	EffectivePrefillTokS        string
-	RequestEffectivePrefillTokS string
-	TTFTMeanMS                  string
-	TTFTP99MS                   string
-	DecodePerUserTokS           string
-	LatencyP95MS                string
-	CompletedRequests           int
-	FailedRequests              int
-	Detail                      SQLiteReportCellDetail
+	MeasurementID                  int64
+	Profile                        string
+	Workload                       string
+	ContextLabel                   string
+	ContextSortKey                 int
+	Shape                          string
+	Concurrency                    int
+	RepeatCount                    int
+	OutputTokS                     string
+	EffectivePrefillTokS           string
+	RequestEffectivePrefillTokS    string
+	RequestEffectivePrefillP50TokS string
+	TTFTMeanMS                     string
+	TTFTP99MS                      string
+	DecodePerUserTokS              string
+	DecodePerUserP50TokS           string
+	LatencyP95MS                   string
+	CompletedRequests              int
+	FailedRequests                 int
+	Detail                         SQLiteReportCellDetail
 }
 
 type SQLiteReportThroughputComparisonRow struct {
@@ -741,6 +749,7 @@ func loadSQLiteReportEngines(db *sql.DB, doc *SQLiteReportDocument) error {
 		}
 		engine.Managed = managed != 0
 		engine.ServedModelsByProfile = servedModelsByProfile(metadataJSON)
+		engine.QuantizationsByProfile = servedQuantizationsByProfile(metadataJSON)
 		doc.Engines = append(doc.Engines, engine)
 	}
 	return rows.Err()
@@ -770,6 +779,32 @@ func servedModelsByProfile(metadataJSON string) map[string][]string {
 	return served
 }
 
+func servedQuantizationsByProfile(metadataJSON string) map[string][]string {
+	var metadata struct {
+		Identity map[string]struct {
+			Models struct {
+				Data []struct {
+					Meta struct {
+						FType string `json:"ftype"`
+					} `json:"meta"`
+				} `json:"data"`
+			} `json:"models"`
+		} `json:"identity"`
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return nil
+	}
+	quantizations := map[string][]string{}
+	for profile, identity := range metadata.Identity {
+		for _, model := range identity.Models.Data {
+			if model.Meta.FType != "" {
+				quantizations[profile] = append(quantizations[profile], model.Meta.FType)
+			}
+		}
+	}
+	return quantizations
+}
+
 func loadSQLiteReportProfiles(db *sql.DB, doc *SQLiteReportDocument) error {
 	rows, err := db.Query(`SELECT
 		id, name, COALESCE(engine_id, ''), model, COALESCE(endpoint_base_url, ''),
@@ -797,7 +832,11 @@ func loadSQLiteReportProfiles(db *sql.DB, doc *SQLiteReportDocument) error {
 		); err != nil {
 			return err
 		}
-		profile.GPUMemoryUtilizationS = displayFloat(profile.GPUMemoryUtilization)
+		if profile.GPUMemoryUtilization > 0 {
+			profile.GPUMemoryUtilizationS = displayFloat(profile.GPUMemoryUtilization)
+		} else {
+			profile.GPUMemoryUtilizationS = "-"
+		}
 		profile.Managed = managed != 0
 		profile.EnableSleepMode = sleep != 0
 		// Tri-state: prefix caching changes how prefill numbers must be
@@ -1000,6 +1039,7 @@ func applySQLiteMeasurementDisplay(measurement *SQLiteReportMeasurement, metrics
 	applyTTFTDisplay(measurement, metrics)
 	measurement.TPOTMeanMS = metricDisplayFirst(metrics, "Mean", "request_tpot", "tpot")
 	measurement.DecodePerUserTokS = metricDisplay(metrics, "request_decode_throughput", "Mean")
+	measurement.DecodePerUserP50TokS = metricDisplay(metrics, "request_decode_throughput", "P50")
 	applyEffectivePrefillDisplay(measurement, metrics)
 	measurement.ITLMeanMS = metricDisplay(metrics, "request_itl_mean", "Mean")
 }
@@ -1025,10 +1065,12 @@ func applyEffectivePrefillDisplay(measurement *SQLiteReportMeasurement, metrics 
 	if measurement.TTFTSource != "stream" {
 		measurement.EffectivePrefillTokS = "-"
 		measurement.RequestEffectivePrefillTokS = "-"
+		measurement.RequestEffectivePrefillP50TokS = "-"
 		return
 	}
 	measurement.EffectivePrefillTokS = metricDisplay(metrics, "effective_prefill_throughput", "Mean")
 	measurement.RequestEffectivePrefillTokS = metricDisplay(metrics, "request_effective_prefill_throughput", "Mean")
+	measurement.RequestEffectivePrefillP50TokS = metricDisplay(metrics, "request_effective_prefill_throughput", "P50")
 }
 
 func loadSQLiteReportMetrics(db *sql.DB, doc *SQLiteReportDocument) error {
@@ -1333,22 +1375,25 @@ func sqliteReportFullRunTimingRows(doc SQLiteReportDocument) []SQLiteReportFullR
 		}
 		failureLabel, failureReason := measurementFailure(measurement)
 		rows = append(rows, SQLiteReportFullRunTimingRow{
-			MeasurementID:               measurement.ID,
-			Profile:                     measurement.Profile,
-			Workload:                    measurement.Workload,
-			ContextLabel:                measurement.ContextLabel,
-			ContextSortKey:              measurement.ContextSortKey,
-			Concurrency:                 measurement.Concurrency,
-			RepeatCount:                 measurement.RepeatCount,
-			OutputTokS:                  measurement.OutputTokS,
-			EffectivePrefillTokS:        measurement.EffectivePrefillTokS,
-			RequestEffectivePrefillTokS: measurement.RequestEffectivePrefillTokS,
-			TTFTMeanMS:                  measurement.TTFTMeanMS,
-			TTFTP99MS:                   measurement.TTFTP99MS,
-			DecodePerUserTokS:           measurement.DecodePerUserTokS,
-			LatencyP95MS:                measurement.LatencyP95MS,
-			CompletedRequests:           measurement.CompletedRequests,
-			FailedRequests:              measurement.FailedRequests,
+			MeasurementID:                  measurement.ID,
+			Profile:                        measurement.Profile,
+			Workload:                       measurement.Workload,
+			ContextLabel:                   measurement.ContextLabel,
+			ContextSortKey:                 measurement.ContextSortKey,
+			Shape:                          throughputRowShape(measurement),
+			Concurrency:                    measurement.Concurrency,
+			RepeatCount:                    measurement.RepeatCount,
+			OutputTokS:                     measurement.OutputTokS,
+			EffectivePrefillTokS:           measurement.EffectivePrefillTokS,
+			RequestEffectivePrefillTokS:    measurement.RequestEffectivePrefillTokS,
+			RequestEffectivePrefillP50TokS: measurement.RequestEffectivePrefillP50TokS,
+			TTFTMeanMS:                     measurement.TTFTMeanMS,
+			TTFTP99MS:                      measurement.TTFTP99MS,
+			DecodePerUserTokS:              measurement.DecodePerUserTokS,
+			DecodePerUserP50TokS:           measurement.DecodePerUserP50TokS,
+			LatencyP95MS:                   measurement.LatencyP95MS,
+			CompletedRequests:              measurement.CompletedRequests,
+			FailedRequests:                 measurement.FailedRequests,
 			Detail: sqliteReportCellDetail(
 				doc,
 				measurement,
@@ -1399,7 +1444,7 @@ func sqliteReportPhaseSections(measurements []SQLiteReportMeasurement) []SQLiteR
 	})
 	out := make([]SQLiteReportPhaseSection, 0, len(phases))
 	for _, phase := range phases {
-		out = append(out, SQLiteReportPhaseSection{Phase: phase, Title: bench.PhaseTitle(phase), Measurements: byPhase[phase]})
+		out = append(out, SQLiteReportPhaseSection{Phase: phase, Title: phaseDisplayTitle(phase), Measurements: byPhase[phase]})
 	}
 	return out
 }
@@ -1500,7 +1545,7 @@ func trimmedThroughputRows(doc SQLiteReportDocument, existing []SQLiteReportThro
 					continue
 				}
 				rows = append(rows, SQLiteReportThroughputRow{
-					Phase:            bench.PhaseTitle(mode),
+					Phase:            phaseDisplayTitle(mode),
 					Mode:             mode,
 					RunID:            doc.Run.ID,
 					Profile:          label,
@@ -1522,7 +1567,7 @@ func trimmedThroughputRows(doc SQLiteReportDocument, existing []SQLiteReportThro
 					FailureReason:    "trimmed by author: " + trim.Reason,
 					Detail: SQLiteReportCellDetail{
 						Available:     true,
-						Phase:         bench.PhaseTitle(mode),
+						Phase:         phaseDisplayTitle(mode),
 						Mode:          mode,
 						Status:        "skipped",
 						FailureLabel:  "trimmed",
@@ -1545,7 +1590,7 @@ func sqliteReportMetadataItems(doc SQLiteReportDocument) []SQLiteReportMetadataI
 		{Label: "Engine", Value: joinUnique(engineSummaries(doc.Engines), ", ")},
 		{Label: "Runs", Value: fmt.Sprint(len(doc.Runs))},
 		{Label: "Hardware", Value: bench.FirstNonEmpty(doc.Run.Hardware, "-")},
-		{Label: "Quant", Value: bench.FirstNonEmpty(inferQuantization(doc.Profiles), "-")},
+		{Label: "Quant", Value: bench.FirstNonEmpty(inferQuantization(doc.Profiles, doc.Engines), "-")},
 		{Label: "KV", Value: bench.FirstNonEmpty(joinUnique(profileKVDtypes(doc.Profiles), ", "), "-")},
 		// Active contexts come only from declared-and-verified claims; the
 		// server limit is reported separately and never as a context.
@@ -1635,7 +1680,7 @@ func sqliteReportThroughputRows(doc SQLiteReportDocument) []SQLiteReportThroughp
 			perUserTokS = displayFailureMetric(perUserTokS, failureLabel)
 		}
 		rows = append(rows, SQLiteReportThroughputRow{
-			Phase:             bench.PhaseTitle(bench.NormalizeReportPhase(measurement.Phase)),
+			Phase:             phaseDisplayTitle(measurement.Phase),
 			Mode:              mode,
 			RunID:             measurement.RunID,
 			MeasurementID:     measurement.ID,
@@ -1755,7 +1800,7 @@ func sqliteReportCellDetail(doc SQLiteReportDocument, measurement SQLiteReportMe
 	profile := findReportProfile(doc.Profiles, measurement.ProfileID, measurement.Profile)
 	detail := SQLiteReportCellDetail{
 		Available:        true,
-		Phase:            bench.PhaseTitle(bench.NormalizeReportPhase(measurement.Phase)),
+		Phase:            phaseDisplayTitle(measurement.Phase),
 		Mode:             mode,
 		Status:           measurement.Status,
 		FailureLabel:     failureLabel,
@@ -1801,16 +1846,18 @@ func sqliteReportCellDetail(doc SQLiteReportDocument, measurement SQLiteReportMe
 func cellDetailMetrics(measurement SQLiteReportMeasurement) []SQLiteReportMetadataItem {
 	items := []SQLiteReportMetadataItem{
 		{Label: "Requests ok/err", Value: fmt.Sprintf("%d / %d", measurement.CompletedRequests, measurement.FailedRequests)},
-		{Label: "Wall time", Value: FormatDurationDisplay(measurement.WallTimeMS)},
+		{Label: "Benchmark duration", Value: FormatDurationDisplay(measurement.WallTimeMS)},
 		{Label: "RPS", Value: FormatRateDisplay(measurement.RPS)},
-		{Label: "Output tok/s", Value: FormatRateDisplay(measurement.OutputTokS)},
-		{Label: "Out/user tok/s", Value: FormatRateDisplay(measurement.PerUserOutputTokS)},
+		{Label: "E2E output tok/s", Value: FormatRateDisplay(measurement.OutputTokS)},
+		{Label: "Output share/user tok/s", Value: FormatRateDisplay(measurement.PerUserOutputTokS)},
 		{Label: "Effective prefill tok/s", Value: FormatRateDisplay(measurement.EffectivePrefillTokS)},
-		{Label: "Effective prefill/user tok/s", Value: FormatRateDisplay(measurement.RequestEffectivePrefillTokS)},
-		{Label: "Decode/user tok/s", Value: FormatRateDisplay(measurement.DecodePerUserTokS)},
-		{Label: "Total tok/s", Value: FormatRateDisplay(measurement.TotalTokS)},
-		{Label: "Prompt tokens", Value: measurement.PromptTokens},
-		{Label: "Completion tokens", Value: measurement.CompletionTokens},
+		{Label: "Effective prefill/user mean", Value: FormatRateDisplay(measurement.RequestEffectivePrefillTokS)},
+		{Label: "Effective prefill/user p50", Value: FormatRateDisplay(measurement.RequestEffectivePrefillP50TokS)},
+		{Label: "Post-first-token/user mean", Value: FormatRateDisplay(measurement.DecodePerUserTokS)},
+		{Label: "Post-first-token/user p50", Value: FormatRateDisplay(measurement.DecodePerUserP50TokS)},
+		{Label: "Input + output tok/s", Value: FormatRateDisplay(measurement.TotalTokS)},
+		{Label: "Prompt tokens across repeats", Value: measurement.PromptTokens},
+		{Label: "Completion tokens across repeats", Value: measurement.CompletionTokens},
 		{Label: "TTFT mean/p50/p95/p99", Value: durationSeries(measurement.TTFTMeanMS, measurement.TTFTP50MS, measurement.TTFTP95MS, measurement.TTFTP99MS)},
 		{Label: "Latency p50/p95/p99", Value: durationSeries(measurement.LatencyP50MS, measurement.LatencyP95MS, measurement.LatencyP99MS)},
 		{Label: "TPOT mean", Value: FormatDurationDisplay(measurement.TPOTMeanMS)},
@@ -1926,6 +1973,13 @@ func dashIfEmpty(value string) string {
 	return value
 }
 
+func phaseDisplayTitle(phase string) string {
+	if bench.NormalizeReportPhase(phase) == "decode" {
+		return "Generation"
+	}
+	return bench.PhaseTitle(bench.NormalizeReportPhase(phase))
+}
+
 func throughputMode(phase string) string {
 	normalized := bench.NormalizeReportPhase(phase)
 	switch normalized {
@@ -2031,6 +2085,12 @@ func sqliteReportThroughputGroups(rows []SQLiteReportThroughputRow) []SQLiteRepo
 			rowIndexes = append(rowIndexes, map[int]int{})
 			mismatchNotes = append(mismatchNotes, "")
 			claims = append(claims, throughputGroupClaim{semantics: row.ContextSemantics, target: row.ContextTarget, fallback: row.ContextLabel})
+		}
+		switch row.Mode {
+		case "prefill":
+			groups[index].HasPrefill = true
+		default:
+			groups[index].HasDecode = true
 		}
 		if row.ContextVerified {
 			claims[index].anyVerified = true
@@ -2481,8 +2541,16 @@ func engineSummaries(engines []SQLiteReportEngine) []string {
 	return values
 }
 
-func inferQuantization(profiles []SQLiteReportProfile) string {
+func inferQuantization(profiles []SQLiteReportProfile, engines []SQLiteReportEngine) string {
 	quantizations := []string{}
+	for _, engine := range engines {
+		for _, values := range engine.QuantizationsByProfile {
+			quantizations = append(quantizations, values...)
+		}
+	}
+	if len(quantizations) > 0 {
+		return joinUnique(quantizations, ", ")
+	}
 	for _, profile := range profiles {
 		model := strings.ToLower(profile.Model)
 		switch {

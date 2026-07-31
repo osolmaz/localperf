@@ -159,7 +159,7 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := out.String()
-	for _, want := range []string{"Repeats", "Per-repeat rows", "±", "&times;2"} {
+	for _, want := range []string{"Repeats", "Per-repeat rows", "±", ">2</td>"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("HTML report missing %q", want)
 		}
@@ -184,6 +184,13 @@ func TestFullRunTimingReportsEffectivePrefillAndDecode(t *testing.T) {
 	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 1)
 	insertAggregateMetric(t, db, 1, "request_effective_prefill_throughput", "tok/s", 1500, 2)
 	insertAggregateMetric(t, db, 1, "request_decode_throughput", "tok/s", 40, 2)
+	if _, err := db.Exec(`UPDATE metric_stats SET p50 = CASE metric
+		WHEN 'request_effective_prefill_throughput' THEN 1400
+		WHEN 'request_decode_throughput' THEN 35 END
+		WHERE measurement_id = 1 AND metric IN ('request_effective_prefill_throughput', 'request_decode_throughput')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -196,14 +203,14 @@ func TestFullRunTimingReportsEffectivePrefillAndDecode(t *testing.T) {
 		t.Fatalf("full-run timing rows = %d, want 1", len(doc.FullRunTimingRows))
 	}
 	row := doc.FullRunTimingRows[0]
-	if row.EffectivePrefillTokS != "1764.000" || row.RequestEffectivePrefillTokS != "1500.000" || row.DecodePerUserTokS != "40.000" {
-		t.Fatalf("full-run timing metrics = %q/%q/%q, want 1764/1500/40", row.EffectivePrefillTokS, row.RequestEffectivePrefillTokS, row.DecodePerUserTokS)
+	if row.EffectivePrefillTokS != "1764.000" || row.RequestEffectivePrefillTokS != "1500.000" || row.RequestEffectivePrefillP50TokS != "1400.000" || row.DecodePerUserTokS != "40.000" || row.DecodePerUserP50TokS != "35.000" {
+		t.Fatalf("full-run timing metrics = %+v, want effective prefill 1764, request mean/p50 1500/1400, post-first-token mean/p50 40/35", row)
 	}
 	var out strings.Builder
 	if err := RenderHTMLReport(&out, doc, HTMLReportOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Full-run timing", "Effective prefill tok/s", "Effective prefill/user", "Decode/user", ">1764<", ">1500<", ">40.0<"} {
+	for _, want := range []string{"Full-run timing", "Effective prefill tok/s", "Effective prefill/user mean / p50", "Post-first-token/user mean / p50", ">1764<", "1500 / 1400", "40.0 / 35.0"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("HTML report missing %q", want)
 		}

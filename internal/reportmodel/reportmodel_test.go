@@ -164,30 +164,37 @@ func TestAllSkippedTableGetsNotRunWarning(t *testing.T) {
 
 func TestBuildCarriesFullRunTiming(t *testing.T) {
 	doc := report.SQLiteReportDocument{
-		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		GeneratedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Measurements: []report.SQLiteReportMeasurement{{RepeatCount: 3}},
 		FullRunTimingRows: []report.SQLiteReportFullRunTimingRow{{
-			MeasurementID:               42,
-			Profile:                     "64k",
-			Workload:                    "generate-full",
-			ContextLabel:                "60k -> 61k active",
-			Concurrency:                 6,
-			RepeatCount:                 3,
-			OutputTokS:                  "20.430 ± 0.270",
-			EffectivePrefillTokS:        "1669.100 ± 25.900",
-			RequestEffectivePrefillTokS: "672.100 ± 14.400",
-			TTFTMeanMS:                  "132006.000 ± 3703.000",
-			TTFTP99MS:                   "221886.000 ± 3546.000",
-			DecodePerUserTokS:           "7.280 ± 0.110",
-			LatencyP95MS:                "300000.000 ± 4000.000",
-			CompletedRequests:           18,
+			MeasurementID:                  42,
+			Profile:                        "64k",
+			Workload:                       "generate-full",
+			ContextLabel:                   "60k -> 61k active",
+			Concurrency:                    6,
+			RepeatCount:                    3,
+			OutputTokS:                     "20.430 ± 0.270",
+			EffectivePrefillTokS:           "1669.100 ± 25.900",
+			RequestEffectivePrefillTokS:    "672.100 ± 14.400",
+			RequestEffectivePrefillP50TokS: "484.500 ± 13.400",
+			TTFTMeanMS:                     "132006.000 ± 3703.000",
+			TTFTP99MS:                      "221886.000 ± 3546.000",
+			DecodePerUserTokS:              "7.280 ± 0.110",
+			DecodePerUserP50TokS:           "6.280 ± 0.130",
+			LatencyP95MS:                   "300000.000 ± 4000.000",
+			CompletedRequests:              18,
 		}},
 	}
-	rows := Build("/tmp/report.sqlite", doc).Throughput.FullRunTiming
+	model := Build("/tmp/report.sqlite", doc)
+	if model.Summary.PointCount != 1 || model.Summary.MeasurementCount != 3 {
+		t.Fatalf("summary point/measurement counts = %d/%d, want 1/3", model.Summary.PointCount, model.Summary.MeasurementCount)
+	}
+	rows := model.Throughput.FullRunTiming
 	if len(rows) != 1 {
 		t.Fatalf("full-run timing rows = %d, want 1", len(rows))
 	}
 	row := rows[0]
-	if row.MeasurementID != 42 || row.EffectivePrefillTokSDisplay != "1669 ± 25.9" || row.DecodePerUserTokSDisplay != "7.28 ± 0.11" {
+	if row.MeasurementID != 42 || row.EffectivePrefillTokSDisplay != "1669 ± 25.9" || row.DecodePerUserTokSDisplay != "7.28 ± 0.11" || row.DecodePerUserP50Display != "6.28 ± 0.13" {
 		t.Fatalf("full-run timing row = %+v", row)
 	}
 	if row.TTFTMeanDisplay != "2m12s ± 3.7s" {

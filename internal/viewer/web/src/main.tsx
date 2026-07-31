@@ -29,6 +29,7 @@ type ReportSummary = {
   latest_run_name: string;
   latest_run_status: string;
   run_count: number;
+  point_count: number;
   measurement_count: number;
   engine?: string;
 };
@@ -37,6 +38,7 @@ type Summary = {
   metadata: MetadataItem[];
   latest_run: { name: string; status: string; hardware: string };
   warnings: { level: string; message: string }[];
+  point_count: number;
   measurement_count: number;
   context_status_counts: Record<string, number>;
 };
@@ -56,6 +58,7 @@ type FullRunTimingRow = {
   profile: string;
   workload: string;
   context_label: string;
+  shape: string;
   concurrency: number;
   repeat_count: number;
   output_tok_s: string;
@@ -64,12 +67,16 @@ type FullRunTimingRow = {
   effective_prefill_tok_s_display: string;
   request_effective_prefill_tok_s: string;
   request_effective_prefill_tok_s_display: string;
+  request_effective_prefill_p50_tok_s: string;
+  request_effective_prefill_p50_display: string;
   ttft_mean_ms: string;
   ttft_mean_display: string;
   ttft_p99_ms: string;
   ttft_p99_display: string;
   decode_per_user_tok_s: string;
   decode_per_user_tok_s_display: string;
+  decode_per_user_p50_tok_s: string;
+  decode_per_user_p50_display: string;
   latency_p95_ms: string;
   latency_p95_display: string;
   ok: number;
@@ -203,7 +210,7 @@ function App() {
           {manifest.value.reports.map((report) => (
             <Tabs.Trigger className="tab-trigger" value={report.id} key={report.id}>
               <span>{report.label}</span>
-              <small>{report.run_count} run{report.run_count === 1 ? "" : "s"} / {report.measurement_count} rows</small>
+              <small>{report.run_count} run{report.run_count === 1 ? "" : "s"} / {report.point_count} points / {report.measurement_count} measurements</small>
             </Tabs.Trigger>
           ))}
         </Tabs.List>
@@ -291,7 +298,7 @@ function FullRunTimingTableView({ rows, reportID }: { rows: FullRunTimingRow[]; 
           <h2>Full-run timing</h2>
           <div className="subline">
             <span>Effective prefill uses streamed TTFT</span>
-            <span>Decode/user uses TPOT</span>
+            <span>Post-first-token speed uses TPOT</span>
           </div>
         </div>
       </div>
@@ -299,9 +306,9 @@ function FullRunTimingTableView({ rows, reportID }: { rows: FullRunTimingRow[]; 
         <table>
           <thead>
             <tr>
-              <th>Profile</th><th>Workload</th><th>Context</th><th>Users</th>
-              <th>Output tok/s</th><th>Effective prefill tok/s</th><th>Effective prefill/user</th>
-              <th>TTFT avg</th><th>TTFT p99</th><th>Decode/user</th><th>Latency p95</th><th>OK / Err</th>
+              <th>Profile</th><th>Workload</th><th>Request shape</th><th>Users</th><th>Repeats</th>
+              <th>E2E output tok/s</th><th>Effective prefill tok/s</th><th>Effective prefill/user mean / p50</th>
+              <th>TTFT avg</th><th>TTFT p99</th><th>Post-first-token/user mean / p50</th><th>Latency p95</th><th>OK / Err</th>
             </tr>
           </thead>
           <tbody>
@@ -309,14 +316,15 @@ function FullRunTimingTableView({ rows, reportID }: { rows: FullRunTimingRow[]; 
               <tr key={`${row.measurement_id}-${row.workload}-${row.concurrency}`}>
                 <td>{row.profile}</td>
                 <td>{row.workload}</td>
-                <td>{row.context_label}</td>
-                <td className="num strong">{row.concurrency}{row.repeat_count > 1 ? ` ×${row.repeat_count}` : ""}</td>
+                <td>{row.shape}</td>
+                <td className="num strong">{row.concurrency}</td>
+                <td className="num">{row.repeat_count}</td>
                 <td><FullRunMetricCell reportID={reportID} row={row} value={row.output_tok_s} display={row.output_tok_s_display} /></td>
                 <td><FullRunMetricCell reportID={reportID} row={row} value={row.effective_prefill_tok_s} display={row.effective_prefill_tok_s_display} /></td>
-                <td><FullRunMetricCell reportID={reportID} row={row} value={row.request_effective_prefill_tok_s} display={row.request_effective_prefill_tok_s_display} /></td>
+                <td><FullRunMetricCell reportID={reportID} row={row} value={row.request_effective_prefill_tok_s} display={`${row.request_effective_prefill_tok_s_display} / ${row.request_effective_prefill_p50_display}`} /></td>
                 <td><FullRunMetricCell reportID={reportID} row={row} value={row.ttft_mean_ms} display={row.ttft_mean_display} /></td>
                 <td><FullRunMetricCell reportID={reportID} row={row} value={row.ttft_p99_ms} display={row.ttft_p99_display} /></td>
-                <td><FullRunMetricCell reportID={reportID} row={row} value={row.decode_per_user_tok_s} display={row.decode_per_user_tok_s_display} /></td>
+                <td><FullRunMetricCell reportID={reportID} row={row} value={row.decode_per_user_tok_s} display={`${row.decode_per_user_tok_s_display} / ${row.decode_per_user_p50_display}`} /></td>
                 <td><FullRunMetricCell reportID={reportID} row={row} value={row.latency_p95_ms} display={row.latency_p95_display} /></td>
                 <td className="num">{row.ok} / {row.err}</td>
               </tr>
@@ -333,7 +341,7 @@ function FullRunMetricCell({ reportID, row, value, display }: { reportID: string
     available: isRealValue(value),
     measurement_id: row.measurement_id,
     workload: row.workload,
-    shape: row.context_label,
+    shape: row.shape,
     status: "completed",
     ok: row.ok,
     err: row.err,
@@ -343,25 +351,35 @@ function FullRunMetricCell({ reportID, row, value, display }: { reportID: string
 
 function ThroughputTableView({ table, reportID }: { table: ThroughputTable; reportID: string }) {
   const enrichedRows = useMemo(() => withHeat(table.rows), [table.rows]);
+  const showDecode = useMemo(() => table.rows.some((row) => row.decode.available), [table.rows]);
+  const showPrefill = useMemo(() => table.rows.some((row) => row.prefill.available), [table.rows]);
   const showSLO = useMemo(() => table.rows.some((row) => isRealValue(row.slo)), [table.rows]);
   const columns = useMemo<ColumnDef<HeatRow>[]>(() => {
     const base: ColumnDef<HeatRow>[] = [
       { accessorKey: "concurrency", header: "Users", cell: (info) => <span className="num strong">{info.getValue<number>()}</span> },
-      phaseColumn(reportID, "decode", "tokS", "Decode tok/s"),
-      phaseColumn(reportID, "decode", "perUser", "Decode/user"),
-      phaseColumn(reportID, "decode", "ttftAvg", "Decode TTFT avg"),
-      phaseColumn(reportID, "decode", "ttftP99", "Decode TTFT p99"),
-      phaseColumn(reportID, "prefill", "tokS", "Prefill tok/s"),
-      phaseColumn(reportID, "prefill", "perUser", "Prefill/user"),
-      phaseColumn(reportID, "prefill", "ttftAvg", "Prefill TTFT avg"),
-      phaseColumn(reportID, "prefill", "ttftP99", "Prefill TTFT p99"),
-      { accessorKey: "result", header: "OK / Err", cell: (info) => <span className="num">{info.row.original.result}</span> },
     ];
+    if (showDecode) {
+      base.push(
+        phaseColumn(reportID, "decode", "tokS", "Generation output tok/s"),
+        phaseColumn(reportID, "decode", "perUser", "Output share/user"),
+        phaseColumn(reportID, "decode", "ttftAvg", "TTFT avg"),
+        phaseColumn(reportID, "decode", "ttftP99", "TTFT p99"),
+      );
+    }
+    if (showPrefill) {
+      base.push(
+        phaseColumn(reportID, "prefill", "tokS", "Prefill input tok/s"),
+        phaseColumn(reportID, "prefill", "perUser", "Input share/user"),
+        phaseColumn(reportID, "prefill", "ttftAvg", "TTFT avg"),
+        phaseColumn(reportID, "prefill", "ttftP99", "TTFT p99"),
+      );
+    }
+    base.push({ accessorKey: "result", header: "OK / Err", cell: (info) => <span className="num">{info.row.original.result}</span> });
     if (showSLO) {
       base.push({ accessorKey: "slo", header: "SLO / goodput", cell: (info) => <span className="num">{info.row.original.slo || "-"}</span> });
     }
     return base;
-  }, [reportID, showSLO]);
+  }, [reportID, showDecode, showPrefill, showSLO]);
   const instance = useReactTable({ data: enrichedRows, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
@@ -370,14 +388,14 @@ function ThroughputTableView({ table, reportID }: { table: ThroughputTable; repo
         <div>
           <h2>{table.title}</h2>
           <div className="subline">
+            <span>Profile {table.profile}</span>
             <span>Server limit {table.server_limit_label}</span>
-            {table.context_label && <span>Context {table.context_label}</span>}
             <span className={`status status-${table.context_status}`}>{table.context_status_label}</span>
           </div>
         </div>
         <div className="shape-grid">
-          <Shape label="Decode" value={table.decode_shape} />
-          <Shape label="Prefill" value={table.prefill_shape} />
+          {showDecode && <Shape label="Generation request" value={table.decode_shape} />}
+          {showPrefill && <Shape label="Prefill request" value={table.prefill_shape} />}
         </div>
       </div>
       {table.warning && <div className="warning compact">{table.warning}</div>}

@@ -3,6 +3,7 @@ package vllmbench
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFinalRunErrorAllowsPartialSweepFailures(t *testing.T) {
@@ -41,6 +42,46 @@ func TestRunStatusFailedWhenFatalRunErrorHasSomeSuccess(t *testing.T) {
 func TestRunStatusFailedWhenSweepHasNoSuccess(t *testing.T) {
 	if got := runStatus(RunSummary{CompletedRuns: 0, FailedRuns: 1}); got != "failed" {
 		t.Fatalf("runStatus() = %q, want failed when every attempted run failed", got)
+	}
+}
+
+func TestApplyRecordedRunTimesKeepsOriginalLifecycleAcrossResume(t *testing.T) {
+	originalStart := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	originalFinish := originalStart.Add(10 * time.Minute)
+	resumeFinish := originalStart.Add(2 * time.Hour)
+	summary := applyRecordedRunTimes(RunSummary{StartedAt: resumeFinish, FinishedAt: resumeFinish}, []Event{
+		{Type: "run_start", Timestamp: originalStart},
+		{Type: "run_finish", Timestamp: originalFinish},
+		{Type: "workload_resumed", Timestamp: resumeFinish},
+		{Type: "run_finish", Timestamp: resumeFinish},
+	})
+	if !summary.StartedAt.Equal(originalStart) || !summary.FinishedAt.Equal(originalFinish) {
+		t.Fatalf("run times = %s/%s, want %s/%s", summary.StartedAt, summary.FinishedAt, originalStart, originalFinish)
+	}
+}
+
+func TestMeasurementTimesIgnoreArtifactResumeTimestamp(t *testing.T) {
+	planned := PlannedRun{Profile: Profile{Name: "p"}, Workload: Workload{Name: "w"}, Concurrency: 1}
+	start := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	finish := start.Add(time.Minute)
+	resume := start.Add(2 * time.Hour)
+	events := []Event{
+		{Type: "workload_start", Profile: "p", Workload: "w", Concurrency: 1, Timestamp: start},
+		{Type: "workload_finish", Profile: "p", Workload: "w", Concurrency: 1, Timestamp: finish},
+		{Type: "workload_resumed", Profile: "p", Workload: "w", Concurrency: 1, Timestamp: resume},
+	}
+	gotStart, gotFinish := measurementTimes(events, planned)
+	if gotStart == nil || gotFinish == nil || !gotStart.Equal(start) || !gotFinish.Equal(finish) {
+		t.Fatalf("measurement times = %v/%v, want %s/%s", gotStart, gotFinish, start, finish)
+	}
+}
+
+func TestMeasurementWallTimePrefersResultDuration(t *testing.T) {
+	start := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	finish := start.Add(2 * time.Hour)
+	got := measurementWallTimeMillis(ReportRow{DurationSeconds: 59.25}, &start, &finish)
+	if got != 59250.0 {
+		t.Fatalf("measurement wall time = %v, want 59250ms from result duration", got)
 	}
 }
 

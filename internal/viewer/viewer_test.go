@@ -37,7 +37,7 @@ func TestNewHandlerServesTabbedReports(t *testing.T) {
 	if manifest.Reports[0].ID == manifest.Reports[1].ID {
 		t.Fatalf("report IDs must be unique: %q", manifest.Reports[0].ID)
 	}
-	if manifest.Reports[0].Label != "gemma" || manifest.Reports[0].RunCount != 1 || manifest.Reports[0].MeasurementCount != 2 {
+	if manifest.Reports[0].Label != "gemma" || manifest.Reports[0].RunCount != 1 || manifest.Reports[0].PointCount != 2 || manifest.Reports[0].MeasurementCount != 2 {
 		t.Fatalf("first summary = %+v, want gemma with one run and two measurements", manifest.Reports[0])
 	}
 
@@ -99,7 +99,7 @@ func TestHandlerServesJSONAPIs(t *testing.T) {
 
 	var summary reportmodel.Summary
 	getJSON(t, server.URL+"/api/reports/"+reportID+"/summary", &summary)
-	if summary.MeasurementCount != 2 || summary.LatestRun.Name != "JSON Run" {
+	if summary.PointCount != 2 || summary.MeasurementCount != 2 || summary.LatestRun.Name != "JSON Run" {
 		t.Fatalf("summary = %+v, want two measurements for JSON Run", summary)
 	}
 
@@ -126,7 +126,7 @@ func TestHandlerServesJSONAPIs(t *testing.T) {
 		t.Fatalf("full-run timing rows = %d, want 1", len(throughput.FullRunTiming))
 	}
 	fullRun := throughput.FullRunTiming[0]
-	if fullRun.EffectivePrefillTokSDisplay != "1600" || fullRun.DecodePerUserTokSDisplay != "40.0" {
+	if fullRun.EffectivePrefillTokSDisplay != "1600" || fullRun.DecodePerUserTokSDisplay != "40.0" || fullRun.DecodePerUserP50Display != "35.0" {
 		t.Fatalf("full-run timing = %+v, want effective prefill 1600 and decode/user 40.0", fullRun)
 	}
 
@@ -335,10 +335,10 @@ func insertViewerFullRunMetrics(t *testing.T, db *sql.DB, measurementID int64) {
 	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}' WHERE id = ?`, measurementID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO metric_stats (measurement_id, metric, unit, mean, count) VALUES
-		(?, 'effective_prefill_throughput', 'tok/s', 1600, 1),
-		(?, 'request_effective_prefill_throughput', 'tok/s', 800, 4),
-		(?, 'request_decode_throughput', 'tok/s', 40, 4)`,
+	if _, err := db.Exec(`INSERT INTO metric_stats (measurement_id, metric, unit, mean, p50, count) VALUES
+		(?, 'effective_prefill_throughput', 'tok/s', 1600, 1600, 1),
+		(?, 'request_effective_prefill_throughput', 'tok/s', 800, 700, 4),
+		(?, 'request_decode_throughput', 'tok/s', 40, 35, 4)`,
 		measurementID, measurementID, measurementID); err != nil {
 		t.Fatal(err)
 	}

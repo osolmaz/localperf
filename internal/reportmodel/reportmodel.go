@@ -22,6 +22,7 @@ type Summary struct {
 	LatestRun           RunSummary         `json:"latest_run"`
 	Runs                []RunSummary       `json:"runs"`
 	Profiles            []ProfileSummary   `json:"profiles"`
+	PointCount          int                `json:"point_count"`
 	MeasurementCount    int                `json:"measurement_count"`
 	Warnings            []ReportWarning    `json:"warnings"`
 	ContextStatusCounts map[string]int     `json:"context_status_counts"`
@@ -70,6 +71,7 @@ type FullRunTimingRow struct {
 	Profile                            string `json:"profile"`
 	Workload                           string `json:"workload"`
 	ContextLabel                       string `json:"context_label"`
+	Shape                              string `json:"shape"`
 	Concurrency                        int    `json:"concurrency"`
 	RepeatCount                        int    `json:"repeat_count"`
 	OutputTokS                         string `json:"output_tok_s"`
@@ -78,12 +80,16 @@ type FullRunTimingRow struct {
 	EffectivePrefillTokSDisplay        string `json:"effective_prefill_tok_s_display"`
 	RequestEffectivePrefillTokS        string `json:"request_effective_prefill_tok_s"`
 	RequestEffectivePrefillTokSDisplay string `json:"request_effective_prefill_tok_s_display"`
+	RequestEffectivePrefillP50TokS     string `json:"request_effective_prefill_p50_tok_s"`
+	RequestEffectivePrefillP50Display  string `json:"request_effective_prefill_p50_display"`
 	TTFTMeanMS                         string `json:"ttft_mean_ms"`
 	TTFTMeanDisplay                    string `json:"ttft_mean_display"`
 	TTFTP99MS                          string `json:"ttft_p99_ms"`
 	TTFTP99Display                     string `json:"ttft_p99_display"`
 	DecodePerUserTokS                  string `json:"decode_per_user_tok_s"`
 	DecodePerUserTokSDisplay           string `json:"decode_per_user_tok_s_display"`
+	DecodePerUserP50TokS               string `json:"decode_per_user_p50_tok_s"`
+	DecodePerUserP50Display            string `json:"decode_per_user_p50_display"`
 	LatencyP95MS                       string `json:"latency_p95_ms"`
 	LatencyP95Display                  string `json:"latency_p95_display"`
 	OK                                 int    `json:"ok"`
@@ -196,7 +202,8 @@ func Build(path string, doc report.SQLiteReportDocument) Document {
 			LatestRun:           runSummary(doc.Run),
 			Runs:                runSummaries(doc.Runs),
 			Profiles:            profileSummaries(doc.Profiles),
-			MeasurementCount:    len(doc.Measurements),
+			PointCount:          len(doc.Measurements),
+			MeasurementCount:    measurementCount(doc.Measurements),
 			Warnings:            reportWarnings(tables),
 			ContextStatusCounts: contextStatusCounts(tables),
 			Legend:              doc.Legend,
@@ -209,6 +216,18 @@ func Build(path string, doc report.SQLiteReportDocument) Document {
 	}
 }
 
+func measurementCount(measurements []report.SQLiteReportMeasurement) int {
+	count := 0
+	for _, measurement := range measurements {
+		repeats := measurement.RepeatCount
+		if repeats <= 0 {
+			repeats = 1
+		}
+		count += repeats
+	}
+	return count
+}
+
 func fullRunTimingRows(rows []report.SQLiteReportFullRunTimingRow) []FullRunTimingRow {
 	out := make([]FullRunTimingRow, 0, len(rows))
 	for _, row := range rows {
@@ -217,6 +236,7 @@ func fullRunTimingRows(rows []report.SQLiteReportFullRunTimingRow) []FullRunTimi
 			Profile:                            row.Profile,
 			Workload:                           row.Workload,
 			ContextLabel:                       row.ContextLabel,
+			Shape:                              row.Shape,
 			Concurrency:                        row.Concurrency,
 			RepeatCount:                        row.RepeatCount,
 			OutputTokS:                         row.OutputTokS,
@@ -225,12 +245,16 @@ func fullRunTimingRows(rows []report.SQLiteReportFullRunTimingRow) []FullRunTimi
 			EffectivePrefillTokSDisplay:        report.FormatRateDisplay(row.EffectivePrefillTokS),
 			RequestEffectivePrefillTokS:        row.RequestEffectivePrefillTokS,
 			RequestEffectivePrefillTokSDisplay: report.FormatRateDisplay(row.RequestEffectivePrefillTokS),
+			RequestEffectivePrefillP50TokS:     row.RequestEffectivePrefillP50TokS,
+			RequestEffectivePrefillP50Display:  report.FormatRateDisplay(row.RequestEffectivePrefillP50TokS),
 			TTFTMeanMS:                         row.TTFTMeanMS,
 			TTFTMeanDisplay:                    report.FormatDurationDisplay(row.TTFTMeanMS),
 			TTFTP99MS:                          row.TTFTP99MS,
 			TTFTP99Display:                     report.FormatDurationDisplay(row.TTFTP99MS),
 			DecodePerUserTokS:                  row.DecodePerUserTokS,
 			DecodePerUserTokSDisplay:           report.FormatRateDisplay(row.DecodePerUserTokS),
+			DecodePerUserP50TokS:               row.DecodePerUserP50TokS,
+			DecodePerUserP50Display:            report.FormatRateDisplay(row.DecodePerUserP50TokS),
 			LatencyP95MS:                       row.LatencyP95MS,
 			LatencyP95Display:                  report.FormatDurationDisplay(row.LatencyP95MS),
 			OK:                                 row.CompletedRequests,
@@ -287,7 +311,10 @@ func compatibleBuilder(builders []*tableBuilder, row report.SQLiteReportThroughp
 }
 
 func newTableBuilder(row report.SQLiteReportThroughputRow, ordinal int) *tableBuilder {
-	title := row.Profile
+	title := contextGroupLabel(row)
+	if title == "" {
+		title = row.Profile
+	}
 	if title == "" {
 		title = contextLabel(row.ContextWindow)
 	}
@@ -457,9 +484,9 @@ func phaseResult(row *ThroughputRow) string {
 	case row.Decode.Available && row.Prefill.Available:
 		return fmt.Sprintf("D %d/%d; P %d/%d", row.Decode.OK, row.Decode.Err, row.Prefill.OK, row.Prefill.Err)
 	case row.Decode.Available:
-		return fmt.Sprintf("D %d/%d", row.Decode.OK, row.Decode.Err)
+		return fmt.Sprintf("%d / %d", row.Decode.OK, row.Decode.Err)
 	case row.Prefill.Available:
-		return fmt.Sprintf("P %d/%d", row.Prefill.OK, row.Prefill.Err)
+		return fmt.Sprintf("%d / %d", row.Prefill.OK, row.Prefill.Err)
 	default:
 		return "0 / 0"
 	}
