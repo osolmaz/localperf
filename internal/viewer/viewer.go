@@ -53,7 +53,6 @@ type ReportSummary struct {
 	LatestRunName    string `json:"latest_run_name"`
 	LatestRunStatus  string `json:"latest_run_status"`
 	RunCount         int    `json:"run_count"`
-	PointCount       int    `json:"point_count"`
 	MeasurementCount int    `json:"measurement_count"`
 	Engine           string `json:"engine,omitempty"`
 }
@@ -222,26 +221,13 @@ func summarizeReport(index int, path string, doc report.SQLiteReportDocument) Re
 		LatestRunName:    doc.Run.Name,
 		LatestRunStatus:  doc.Run.Status,
 		RunCount:         len(doc.Runs),
-		PointCount:       len(doc.Measurements),
-		MeasurementCount: reportMeasurementCount(doc.Measurements),
+		MeasurementCount: len(doc.Measurements),
 		Engine:           reportEngine(doc),
 	}
 }
 
 // reportEngine summarizes the artifact's engine identity so the app can
 // flag cross-report engine differences before anyone compares tabs.
-func reportMeasurementCount(measurements []report.SQLiteReportMeasurement) int {
-	count := 0
-	for _, measurement := range measurements {
-		repeats := measurement.RepeatCount
-		if repeats <= 0 {
-			repeats = 1
-		}
-		count += repeats
-	}
-	return count
-}
-
 func reportEngine(doc report.SQLiteReportDocument) string {
 	for _, item := range doc.MetadataItems {
 		if item.Label == "Engine" {
