@@ -74,6 +74,15 @@ func TestGenerationPopulatesHistoricalDecodeAndPrefillColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 2)
+	insertAggregateMetric(t, db, 1, "request_effective_prefill_throughput", "tok/s", 1500, 2)
+	insertAggregateMetric(t, db, 1, "request_decode_throughput", "tok/s", 40, 2)
+	if _, err := db.Exec(`UPDATE metric_stats SET p50 = CASE metric
+		WHEN 'request_effective_prefill_throughput' THEN 1400
+		WHEN 'request_decode_throughput' THEN 35 END
+		WHERE measurement_id = 1 AND metric IN ('request_effective_prefill_throughput', 'request_decode_throughput')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +104,20 @@ func TestGenerationPopulatesHistoricalDecodeAndPrefillColumns(t *testing.T) {
 	if row.OK != 2 || row.Err != 0 || row.Result != "2 / 0" {
 		t.Fatalf("derived prefill double-counted requests: %+v", row)
 	}
+	detailLabels := map[string]bool{}
+	for _, item := range row.DecodeDetail.Metrics {
+		detailLabels[item.Label] = true
+	}
+	for _, label := range []string{
+		"Request effective prefill mean",
+		"Request effective prefill p50",
+		"Post-first-token/user mean",
+		"Post-first-token/user p50",
+	} {
+		if !detailLabels[label] {
+			t.Fatalf("decode detail is missing request distribution %q: %v", label, detailLabels)
+		}
+	}
 
 	var out strings.Builder
 	if err := RenderHTMLReport(&out, doc, HTMLReportOptions{}); err != nil {
@@ -106,6 +129,55 @@ func TestGenerationPopulatesHistoricalDecodeAndPrefillColumns(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Full-run timing") {
 		t.Fatal("HTML report contains rejected full-run timing section")
+	}
+}
+
+func TestThroughputGroupsPreserveDistinctGenerationWorkloads(t *testing.T) {
+	row := func(workload, shape string, concurrency int) SQLiteReportThroughputRow {
+		return SQLiteReportThroughputRow{
+			Mode:                        "decode",
+			Profile:                     "64k",
+			Workload:                    workload,
+			ContextWindow:               65536,
+			ContextLabel:                "64k capacity",
+			ContextSortKey:              65536,
+			ContextTarget:               65536,
+			ContextSemantics:            "capacity",
+			Concurrency:                 concurrency,
+			Shape:                       shape,
+			ThroughputTokS:              "100",
+			PerUserTokS:                 "100",
+			EffectivePrefillTokS:        "200",
+			EffectivePrefillPerUserTokS: "200",
+			Status:                      "completed",
+			CompletedRequests:           concurrency,
+			Detail: SQLiteReportCellDetail{
+				Available: true,
+				Mode:      "decode",
+				Workload:  workload,
+				Shape:     shape,
+			},
+		}
+	}
+	rows := []SQLiteReportThroughputRow{
+		row("generate-empty", "1 in / 1024 out", 1),
+		row("generate-empty", "1 in / 1024 out", 6),
+		row("generate-full", "64512 in / 1024 out", 1),
+		row("generate-full", "64512 in / 1024 out", 6),
+	}
+	groups := sqliteReportThroughputGroups(rows)
+	if len(groups) != 2 {
+		t.Fatalf("throughput groups = %d, want one table per generation workload", len(groups))
+	}
+	workloads := map[string]int{}
+	for _, group := range groups {
+		if len(group.Rows) != 2 {
+			t.Fatalf("rows in group = %d, want c1 and c6: %+v", len(group.Rows), group)
+		}
+		workloads[group.Rows[0].DecodeDetail.Workload]++
+	}
+	if workloads["generate-empty"] != 1 || workloads["generate-full"] != 1 {
+		t.Fatalf("grouped workloads = %v, want both generation workloads preserved", workloads)
 	}
 }
 
