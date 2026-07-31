@@ -273,9 +273,11 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 	metrics := phaseMetrics(source)
 	switch source.Mode {
 	case "prefill":
-		target.Prefill = metrics
-		if source.Shape != "" && source.Shape != "-" {
-			builder.prefillShapes[source.Shape] = struct{}{}
+		if !target.Prefill.Derived || phaseHasUsableMetric(metrics) {
+			target.Prefill = metrics
+			if source.Shape != "" && source.Shape != "-" {
+				builder.prefillShapes[source.Shape] = struct{}{}
+			}
 		}
 	case "decode":
 		target.Decode = metrics
@@ -315,7 +317,7 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 
 func applyDerivedPrefillMetrics(target *ThroughputRow, source report.SQLiteReportThroughputRow) {
 	value := strings.TrimSpace(source.EffectivePrefillTokS)
-	if value == "" || value == "-" || (target.Prefill.Available && !target.Prefill.Derived) {
+	if value == "" || value == "-" || (!target.Prefill.Derived && phaseHasUsableMetric(target.Prefill)) {
 		return
 	}
 	target.Prefill = PhaseMetrics{
@@ -339,6 +341,15 @@ func applyDerivedPrefillMetrics(target *ThroughputRow, source report.SQLiteRepor
 		DetailURL:          fmt.Sprintf("measurements/%d", source.MeasurementID),
 		Derived:            true,
 	}
+}
+
+func phaseHasUsableMetric(phase PhaseMetrics) bool {
+	value := strings.TrimSpace(strings.SplitN(phase.TokS, "±", 2)[0])
+	if !phase.Available || phase.FailureLabel != "" || value == "" || value == "-" {
+		return false
+	}
+	_, err := strconv.ParseFloat(value, 64)
+	return err == nil
 }
 
 func phaseSlot(row *ThroughputRow, mode string) PhaseMetrics {

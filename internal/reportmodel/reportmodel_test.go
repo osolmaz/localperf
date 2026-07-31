@@ -226,6 +226,33 @@ func TestDedicatedPrefillTakesPrecedenceOverGenerationFallback(t *testing.T) {
 	}
 }
 
+func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
+	for _, dedicatedFirst := range []bool{false, true} {
+		decode := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+		decode.EffectivePrefillTokS = "1600"
+		decode.EffectivePrefillPerUserTokS = "266.667"
+		failedPrefill := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+		failedPrefill.Mode = "prefill"
+		failedPrefill.Workload = "prefill-full"
+		failedPrefill.ThroughputTokS = "failed"
+		failedPrefill.PerUserTokS = "failed"
+		failedPrefill.Status = "failed"
+		failedPrefill.FailureLabel = "failed"
+		rows := []report.SQLiteReportThroughputRow{decode, failedPrefill}
+		if dedicatedFirst {
+			rows[0], rows[1] = rows[1], rows[0]
+		}
+		doc := report.SQLiteReportDocument{
+			GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			ThroughputRows: rows,
+		}
+		got := Build("/tmp/report.sqlite", doc).Throughput.Tables[0].Rows[0]
+		if !got.Prefill.Derived || got.Prefill.TokS != "1600" || got.Result != "6 / 0" {
+			t.Fatalf("dedicatedFirst=%v fallback = %+v", dedicatedFirst, got)
+		}
+	}
+}
+
 func TestCompletedUnverifiedRowDemotesTable(t *testing.T) {
 	verified := throughputRow("run-1", "16k", "16k active context", 16384, 1)
 	verified.ContextTarget = 16384
