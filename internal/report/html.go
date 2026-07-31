@@ -1852,10 +1852,7 @@ func compactJSONForDetail(data string) string {
 }
 
 func displayPositiveInt(value int) string {
-	if value <= 0 {
-		return "-"
-	}
-	return fmt.Sprint(value)
+	return displayWhenPositive(value > 0, fmt.Sprint(value))
 }
 
 func displayContextWindow(value int) string {
@@ -2789,10 +2786,14 @@ func displayFloat(value float64) string {
 }
 
 func displayOptionalPositiveFloat(value float64) string {
-	if value <= 0 {
+	return displayWhenPositive(value > 0, displayFloat(value))
+}
+
+func displayWhenPositive(positive bool, value string) string {
+	if !positive {
 		return "-"
 	}
-	return displayFloat(value)
+	return value
 }
 
 // FormatRateDisplay renders a rate (tok/s, req/s) at roughly three
