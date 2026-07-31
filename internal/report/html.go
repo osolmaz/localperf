@@ -804,7 +804,7 @@ func loadSQLiteReportProfiles(db *sql.DB, doc *SQLiteReportDocument) error {
 		); err != nil {
 			return err
 		}
-		profile.GPUMemoryUtilizationS = displayFloat(profile.GPUMemoryUtilization)
+		profile.GPUMemoryUtilizationS = displayOptionalPositiveFloat(profile.GPUMemoryUtilization)
 		profile.Managed = managed != 0
 		profile.EnableSleepMode = sleep != 0
 		// Tri-state: prefix caching changes how prefill numbers must be
@@ -2144,7 +2144,8 @@ func applyThroughputComparisonSource(target *SQLiteReportThroughputComparisonRow
 }
 
 func applyDerivedPrefill(target *SQLiteReportThroughputComparisonRow, source SQLiteReportThroughputRow) {
-	if !displayedMetricAvailable(source.EffectivePrefillTokS) || comparisonPrefillHasUsableMetric(*target) {
+	if !strings.EqualFold(strings.TrimSpace(source.Status), "completed") || source.FailureLabel != "" ||
+		!displayedMetricAvailable(source.EffectivePrefillTokS) || comparisonPrefillHasUsableMetric(*target) {
 		return
 	}
 	target.PrefillTokS = source.EffectivePrefillTokS
@@ -2773,6 +2774,13 @@ func displayNullFloat(value sql.NullFloat64) string {
 
 func displayFloat(value float64) string {
 	return fmt.Sprintf("%.3f", value)
+}
+
+func displayOptionalPositiveFloat(value float64) string {
+	if value <= 0 {
+		return "-"
+	}
+	return displayFloat(value)
 }
 
 // FormatRateDisplay renders a rate (tok/s, req/s) at roughly three

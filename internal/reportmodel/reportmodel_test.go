@@ -184,6 +184,7 @@ func TestPhaseMetricsCarryDisplayStrings(t *testing.T) {
 func TestGenerationEffectivePrefillUsesHistoricalViewerColumns(t *testing.T) {
 	row := throughputRow("run-1", "64k", "60k -> 61k active", 65536, 6)
 	row.Workload = "generate-full"
+	row.Status = "completed"
 	row.ThroughputTokS = "20.430 ± 0.270"
 	row.PerUserTokS = "3.405 ± 0.045"
 	row.EffectivePrefillTokS = "1669.100 ± 25.900"
@@ -229,6 +230,7 @@ func TestDedicatedPrefillTakesPrecedenceOverGenerationFallback(t *testing.T) {
 func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 	for _, dedicatedFirst := range []bool{false, true} {
 		decode := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+		decode.Status = "completed"
 		decode.EffectivePrefillTokS = "1600"
 		decode.EffectivePrefillPerUserTokS = "266.667"
 		failedPrefill := throughputRow("run-1", "64k", "64k active context", 65536, 6)
@@ -250,6 +252,21 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		if !got.Prefill.Derived || got.Prefill.TokS != "1600" || got.Result != "6 / 0" {
 			t.Fatalf("dedicatedFirst=%v fallback = %+v", dedicatedFirst, got)
 		}
+	}
+}
+
+func TestFailedGenerationDoesNotDerivePrefill(t *testing.T) {
+	row := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+	row.Status = "failed"
+	row.FailureLabel = "failed"
+	row.EffectivePrefillTokS = "1600"
+	doc := report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{row},
+	}
+	got := Build("/tmp/report.sqlite", doc).Throughput.Tables[0].Rows[0]
+	if got.Prefill.Available || got.Prefill.Derived || got.Decode.FailureLabel != "failed" {
+		t.Fatalf("failed generation fallback = %+v", got)
 	}
 }
 

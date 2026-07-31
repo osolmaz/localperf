@@ -301,6 +301,15 @@ func TestTokenThroughputMetricDisplay(t *testing.T) {
 	}
 }
 
+func TestDisplayOptionalPositiveFloat(t *testing.T) {
+	if got := displayOptionalPositiveFloat(0); got != "-" {
+		t.Fatalf("missing utilization = %q, want unavailable", got)
+	}
+	if got := displayOptionalPositiveFloat(0.35); got != "0.350" {
+		t.Fatalf("configured utilization = %q, want 0.350", got)
+	}
+}
+
 func TestInferQuantizationUsesServerReportedGGUFFType(t *testing.T) {
 	metadata := `{"identity":{"64k":{"models":{"data":[{"id":"model","meta":{"ftype":"Q4_K - Medium"}}]}}}}`
 	quantizations := servedQuantizationsByProfile(metadata)
@@ -315,6 +324,7 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		row := emptyThroughputComparisonRow(6)
 		decode := SQLiteReportThroughputRow{
 			Mode:                        "decode",
+			Status:                      "completed",
 			EffectivePrefillTokS:        "1600",
 			EffectivePrefillPerUserTokS: "266.667",
 			TTFTMeanMS:                  "100",
@@ -338,6 +348,22 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		if !row.PrefillDerived || row.PrefillTokS != "1600" || row.Requests != "18 / 0" {
 			t.Fatalf("dedicatedFirst=%v fallback = %+v", dedicatedFirst, row)
 		}
+	}
+}
+
+func TestFailedGenerationDoesNotDerivePrefill(t *testing.T) {
+	row := emptyThroughputComparisonRow(6)
+	applyThroughputComparisonSource(&row, SQLiteReportThroughputRow{
+		Mode:                 "decode",
+		Status:               "failed",
+		FailureLabel:         "failed",
+		EffectivePrefillTokS: "1600",
+		CompletedRequests:    5,
+		FailedRequests:       1,
+		Detail:               SQLiteReportCellDetail{Available: true, FailureLabel: "failed"},
+	})
+	if row.PrefillDerived || row.PrefillTokS != "-" || !strings.Contains(row.Result, "failed") {
+		t.Fatalf("failed generation fallback = %+v", row)
 	}
 }
 
