@@ -182,6 +182,35 @@ func TestThroughputGroupsPreserveDistinctGenerationWorkloads(t *testing.T) {
 	}
 }
 
+func TestDedicatedPrefillPopulatesEveryGenerationWorkloadGroup(t *testing.T) {
+	decode := func(workload string) SQLiteReportThroughputRow {
+		return SQLiteReportThroughputRow{
+			Mode: "decode", Profile: "64k", Workload: workload, ContextWindow: 65536,
+			ContextLabel: "64k capacity", ContextSortKey: 65536, ContextTarget: 65536,
+			ContextSemantics: "capacity", Concurrency: 6, Shape: "decode shape",
+			ThroughputTokS: "100", EffectivePrefillTokS: "1500", Status: "completed",
+			Detail: SQLiteReportCellDetail{Available: true, Mode: "decode", Workload: workload, Shape: "decode shape"},
+		}
+	}
+	prefill := SQLiteReportThroughputRow{
+		Mode: "prefill", Profile: "64k", Workload: "prefill-full", ContextWindow: 65536,
+		ContextLabel: "64k capacity", ContextSortKey: 65536, ContextTarget: 65536,
+		ContextSemantics: "capacity", Concurrency: 6, Shape: "prefill shape",
+		ThroughputTokS: "2200", Status: "completed",
+		Detail: SQLiteReportCellDetail{Available: true, Mode: "prefill", Workload: "prefill-full", Shape: "prefill shape"},
+	}
+	groups := sqliteReportThroughputGroups([]SQLiteReportThroughputRow{prefill, decode("generate-empty"), decode("generate-full")})
+	if len(groups) != 2 {
+		t.Fatalf("groups = %d, want two generation workloads", len(groups))
+	}
+	for _, group := range groups {
+		got := group.Rows[0]
+		if got.PrefillDerived || got.PrefillTokS != "2200" || got.PrefillDetail.Workload != "prefill-full" {
+			t.Fatalf("group %q prefill precedence = %+v", group.DecodeWorkload, got)
+		}
+	}
+}
+
 func metadataHasValue(items []SQLiteReportMetadataItem, label, value string) bool {
 	for _, item := range items {
 		if item.Label == label && item.Value == value {

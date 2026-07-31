@@ -304,6 +304,35 @@ func TestDedicatedPrefillTakesPrecedenceOverGenerationFallback(t *testing.T) {
 	}
 }
 
+func TestDedicatedPrefillTakesPrecedenceInEveryDecodeTable(t *testing.T) {
+	empty := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+	empty.Workload = "generate-empty"
+	empty.Status = "completed"
+	empty.EffectivePrefillTokS = "1600"
+	full := empty
+	full.RunID = "run-2"
+	full.Workload = "generate-full"
+	full.EffectivePrefillTokS = "1700"
+	prefill := throughputRow("run-3", "64k", "64k active context", 65536, 6)
+	prefill.Mode = "prefill"
+	prefill.Workload = "prefill-full"
+	prefill.Status = "completed"
+	prefill.ThroughputTokS = "2200"
+	tables := Build("/tmp/report.sqlite", report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{prefill, empty, full},
+	}).Throughput.Tables
+	if len(tables) != 2 {
+		t.Fatalf("tables = %d, want two decode workloads", len(tables))
+	}
+	for _, table := range tables {
+		got := table.Rows[0].Prefill
+		if got.Derived || got.TokS != "2200" || got.Workload != "prefill-full" {
+			t.Fatalf("table %q prefill precedence = %+v", table.DecodeWorkload, got)
+		}
+	}
+}
+
 func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 	for _, dedicatedFirst := range []bool{false, true} {
 		decode := throughputRow("run-1", "64k", "64k active context", 65536, 6)
