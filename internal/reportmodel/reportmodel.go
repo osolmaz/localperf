@@ -236,6 +236,9 @@ func compatibleBuilder(builders []*tableBuilder, row report.SQLiteReportThroughp
 		if existing == nil {
 			return builder
 		}
+		if row.Mode != "prefill" && existing.Decode.Available && existing.Decode.Workload != row.Workload {
+			continue
+		}
 		slot := phaseSlot(existing, row.Mode)
 		if !slot.Available || (row.Mode == "prefill" && slot.Derived) {
 			return builder

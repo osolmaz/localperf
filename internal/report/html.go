@@ -2058,6 +2058,9 @@ func compatibleThroughputGroup(
 			}
 			continue
 		}
+		if target.DecodeDetail.Available && target.DecodeDetail.Workload != source.Workload {
+			continue
+		}
 		if !target.DecodeDetail.Available || target.DecodeShape == source.Shape {
 			return index, true
 		}

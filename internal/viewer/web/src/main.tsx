@@ -181,7 +181,7 @@ function App() {
           {manifest.value.reports.map((report) => (
             <Tabs.Trigger className="tab-trigger" value={report.id} key={report.id}>
               <span>{report.label}</span>
-              <small>{report.run_count} run{report.run_count === 1 ? "" : "s"} / {report.measurement_count} rows</small>
+              <small>{report.run_count} run{report.run_count === 1 ? "" : "s"} / {report.measurement_count} measurement{report.measurement_count === 1 ? "" : "s"}</small>
             </Tabs.Trigger>
           ))}
         </Tabs.List>

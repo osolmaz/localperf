@@ -49,6 +49,33 @@ func TestTotalMeasurementCountIncludesAggregatedRepeats(t *testing.T) {
 	}
 }
 
+func TestBuildKeepsDecodeWorkloadsSeparateWhenShapesMatch(t *testing.T) {
+	first := throughputRow("run-1", "64k", "64k capacity", 65536, 1)
+	first.Workload = "generate-empty"
+	first.Shape = "same shape"
+	first.Status = "completed"
+	first.EffectivePrefillTokS = "100"
+	second := first
+	second.RunID = "run-2"
+	second.Workload = "generate-full"
+	second.ThroughputTokS = "200"
+	second.EffectivePrefillTokS = "300"
+	doc := report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{first, second},
+	}
+	tables := Build("/tmp/report.sqlite", doc).Throughput.Tables
+	if len(tables) != 2 {
+		t.Fatalf("tables = %d, want one per decode workload", len(tables))
+	}
+	for _, table := range tables {
+		row := table.Rows[0]
+		if row.Decode.Workload != row.Prefill.Workload {
+			t.Fatalf("mixed decode/prefill workloads: %+v", row)
+		}
+	}
+}
+
 func TestBuildLabelsUnverifiedContext(t *testing.T) {
 	doc := report.SQLiteReportDocument{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
