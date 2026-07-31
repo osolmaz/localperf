@@ -2076,7 +2076,7 @@ func applyThroughputComparisonSource(target *SQLiteReportThroughputComparisonRow
 	switch source.Mode {
 	case "prefill":
 		if target.PrefillDerived && !throughputRowHasUsableMetric(source) {
-			break
+			return
 		}
 		target.PrefillTokS = source.ThroughputTokS
 		target.PrefillPerUserTokS = source.PerUserTokS
@@ -2155,6 +2155,11 @@ func applyDerivedPrefill(target *SQLiteReportThroughputComparisonRow, source SQL
 	target.PrefillShape = source.Shape
 	target.PrefillDetail = derivedPrefillDetail(source.Detail)
 	target.PrefillDerived = true
+	// The derived measurement replaces an unusable dedicated prefill point,
+	// including any failure label or SLO state that point left behind.
+	target.Result = ""
+	target.ResultDetail = SQLiteReportCellDetail{}
+	target.PrefillSLO = ""
 }
 
 func derivedPrefillDetail(detail SQLiteReportCellDetail) SQLiteReportCellDetail {
