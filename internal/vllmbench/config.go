@@ -192,7 +192,6 @@ type Workload struct {
 	Phase                   string      `json:"phase,omitempty"`
 	ContextTarget           int         `json:"context_target"`
 	ContextSemantics        string      `json:"context_semantics"`
-	MeasuredInputExpected   int         `json:"measured_input_tokens_expected,omitempty"`
 	SLO                     *SLOConfig  `json:"slo,omitempty"`
 	LoadGenerator           string      `json:"load_generator,omitempty"`
 	Dataset                 DatasetSpec `json:"dataset,omitempty"`
@@ -200,7 +199,6 @@ type Workload struct {
 	Profiles                []string    `json:"profiles,omitempty"`
 	NumPrompts              int         `json:"num_prompts"`
 	PromptsPerUser          int         `json:"prompts_per_user,omitempty"`
-	BatchesPerRepeat        int         `json:"batches_per_repeat,omitempty"`
 	Repeats                 int         `json:"repeats,omitempty"`
 	MaxConcurrency          []int       `json:"max_concurrency"`
 	Stream                  *bool       `json:"stream,omitempty"`
@@ -427,7 +425,7 @@ func applyDatasetDefaults(workload *Workload) {
 	if workload.Dataset.SampleCount <= 0 {
 		workload.Dataset.SampleCount = defaultDatasetSampleCount(*workload)
 	}
-	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && workload.BatchesPerRepeat <= 0 && workload.Dataset.SampleCount > 0 {
+	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && workload.Dataset.SampleCount > 0 {
 		workload.NumPrompts = workload.Dataset.SampleCount
 	}
 }
@@ -438,7 +436,7 @@ func defaultDatasetSampleCount(workload Workload) int {
 	if workload.NumPrompts > 0 {
 		return workload.NumPrompts
 	}
-	if workload.PromptsPerUser > 0 || workload.BatchesPerRepeat > 0 {
+	if workload.PromptsPerUser > 0 {
 		return resolvedNumPrompts(workload, largestConcurrency(workload))
 	}
 	return 0
@@ -925,12 +923,6 @@ func validateWorkload(prefix string, workload Workload, profileNames, names map[
 // context number means active context or server capacity, and an active
 // claim must be backed by the requested token shape.
 func validateWorkloadContextSemantics(prefix string, workload Workload, profiles []Profile) []string {
-	if workload.MeasuredInputExpected < 0 {
-		return []string{prefix + ": measured_input_tokens_expected must not be negative"}
-	}
-	if workload.MeasuredInputExpected > 0 && workload.ContextSemantics != ContextSemanticsActive {
-		return []string{prefix + `: measured_input_tokens_expected requires context_semantics "active"`}
-	}
 	if workload.ContextTarget <= 0 || strings.TrimSpace(workload.ContextSemantics) == "" {
 		return []string{prefix + ": context_target and context_semantics are required on every workload; see docs/2026-07-02-context-semantics.md"}
 	}
@@ -972,13 +964,12 @@ func validateActiveContextClaim(prefix string, workload Workload, profiles []Pro
 		return []string{prefix + `: context_semantics "active" requires random_range_ratio 0 so every request stays inside the claimed band`}
 	}
 	var issues []string
-	inputTokens, claimVerb := activeInputClaim(workload)
-	requested := inputTokens + workload.RandomOutputLen
+	requested := workload.RandomInputLen + workload.RandomOutputLen
 	target := workload.ContextTarget
 	if float64(requested) < ContextTargetMinFrac*float64(target) || requested > target {
 		issues = append(issues, fmt.Sprintf(
-			"%s: claims active context %d but %s %d+%d=%d tokens (%.0f%% of target); this measures a ~%s active workload on a %s-capacity server. Either set context_target to %d, adjust the input token contract, or declare context_semantics: %q",
-			prefix, target, claimVerb, inputTokens, workload.RandomOutputLen, requested,
+			"%s: claims active context %d but requests %d+%d=%d tokens (%.0f%% of target); this measures a ~%s active workload on a %s-capacity server. Either set context_target to %d, adjust random_input_len, or declare context_semantics: %q",
+			prefix, target, workload.RandomInputLen, workload.RandomOutputLen, requested,
 			100*float64(requested)/float64(target), TokenCountLabel(requested), TokenCountLabel(target), requested, ContextSemanticsCapacity))
 	}
 	for _, profile := range pairedProfiles(workload, profiles) {
@@ -990,13 +981,6 @@ func validateActiveContextClaim(prefix string, workload Workload, profiles []Pro
 		}
 	}
 	return issues
-}
-
-func activeInputClaim(workload Workload) (int, string) {
-	if workload.MeasuredInputExpected > 0 {
-		return workload.MeasuredInputExpected, "expects measured"
-	}
-	return workload.RandomInputLen, "requests"
 }
 
 func validateCapacityContextClaim(prefix string, workload Workload, profiles []Profile) []string {
@@ -1055,7 +1039,6 @@ func validateWorkloadFields(prefix string, workload Workload) []string {
 	issues = append(issues, validateWorkloadRole(prefix, workload)...)
 	issues = append(issues, validateWorkloadDatasetName(prefix, workload)...)
 	issues = append(issues, validateWorkloadPositiveFields(prefix, workload)...)
-	issues = append(issues, validateWorkloadSamplePolicy(prefix, workload)...)
 	issues = append(issues, validateWorkloadPhase(prefix, workload)...)
 	issues = append(issues, validateLoadGenerator(prefix, workload.LoadGenerator)...)
 	issues = append(issues, validateLoadGeneratorDataset(prefix, workload)...)
@@ -1071,25 +1054,6 @@ func validateWorkloadRole(prefix string, workload Workload) []string {
 	}
 }
 
-func validateWorkloadSamplePolicy(prefix string, workload Workload) []string {
-	if workload.Role != WorkloadRoleBenchmark || workload.BatchesPerRepeat > 0 {
-		return nil
-	}
-	var issues []string
-	if workload.PromptsPerUser > 0 && workload.PromptsPerUser < 2 {
-		issues = append(issues, prefix+": benchmark prompts_per_user must be at least 2")
-	}
-	for _, concurrency := range workload.MaxConcurrency {
-		required := max(8, 2*concurrency)
-		if actual := resolvedNumPrompts(workload, concurrency); actual < required {
-			issues = append(issues, fmt.Sprintf(
-				"%s: benchmark concurrency %d resolves to %d prompts; need at least %d (max(8, 2 * concurrency))",
-				prefix, concurrency, actual, required))
-		}
-	}
-	return issues
-}
-
 func validateWorkloadDatasetName(prefix string, workload Workload) []string {
 	if strings.TrimSpace(workload.DatasetName) == "" && !hasStructuredDataset(workload) {
 		return []string{prefix + ": dataset_name is required"}
@@ -1099,18 +1063,14 @@ func validateWorkloadDatasetName(prefix string, workload Workload) []string {
 
 func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	var issues []string
-	policies := boolToInt(workload.NumPrompts > 0) + boolToInt(workload.PromptsPerUser > 0) + boolToInt(workload.BatchesPerRepeat > 0)
-	if policies == 0 {
-		issues = append(issues, prefix+": num_prompts, prompts_per_user, or batches_per_repeat must be positive")
+	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 {
+		issues = append(issues, prefix+": num_prompts or prompts_per_user must be positive")
 	}
-	if policies > 1 {
-		issues = append(issues, prefix+": set exactly one of num_prompts, prompts_per_user, or batches_per_repeat")
+	if workload.NumPrompts > 0 && workload.PromptsPerUser > 0 {
+		issues = append(issues, prefix+": set either num_prompts (fixed) or prompts_per_user (scales with concurrency), not both")
 	}
 	if workload.PromptsPerUser < 0 {
 		issues = append(issues, prefix+": prompts_per_user must not be negative")
-	}
-	if workload.BatchesPerRepeat < 0 {
-		issues = append(issues, prefix+": batches_per_repeat must not be negative")
 	}
 	if workload.Repeats <= 0 {
 		issues = append(issues, prefix+": repeats must be positive")
@@ -1371,28 +1331,13 @@ func buildPlannedRun(runDir string, profile Profile, workload Workload, concurre
 	}
 }
 
-// minPromptsPerPoint is the default sample floor per measurement: fewer
-// requests trades hours for noise the ± spreads would only confirm. Deliberate
-// fixed-batch workloads instead declare batches_per_repeat and use repeats as
-// their independent replication axis.
-const minPromptsPerPoint = 8
-
 // resolvedNumPrompts scales the request count with concurrency when the
-// workload declares prompts_per_user or batches_per_repeat. Fixed batches do
-// not receive the default statistical floor: one c6 batch is exactly six
-// simultaneous requests.
+// workload declares prompts_per_user.
 func resolvedNumPrompts(workload Workload, concurrency int) int {
-	if workload.BatchesPerRepeat > 0 {
-		return workload.BatchesPerRepeat * concurrency
-	}
 	if workload.PromptsPerUser <= 0 {
 		return workload.NumPrompts
 	}
-	prompts := workload.PromptsPerUser * concurrency
-	if prompts < minPromptsPerPoint {
-		return minPromptsPerPoint
-	}
-	return prompts
+	return workload.PromptsPerUser * concurrency
 }
 
 func RunDir(base string, spec Spec, now time.Time) string {

@@ -79,9 +79,8 @@ Prefill rows are reported as aggregate and per-user prefill tok/s; decode rows
 as aggregate and per-user output tok/s.
 
 Request counts scale with concurrency: `prompts_per_user` (default 2) gives
-`num_prompts = max(8, 2 x concurrency)` per point, so `c1` points stop paying
-for `c32`-sized sample counts. Do not go below the floor of 8 requests per
-point; that trades hours for noise.
+`num_prompts = 2 x concurrency` per point, so `c1` points stop paying for
+`c32`-sized sample counts. Override the default when the benchmark calls for a different batch size.
 
 Long-output behavior is a stress preset, not the baseline:
 `localperf sweep plan --stress` adds `4096`-token decode spot checks at

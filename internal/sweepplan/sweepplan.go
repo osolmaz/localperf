@@ -29,7 +29,7 @@ type PlanRequest struct {
 	// scale with concurrency via PromptsPerUser instead.
 	NumPrompts int `json:"num_prompts,omitempty"`
 	// PromptsPerUser scales requests with concurrency
-	// (num_prompts = max(8, PromptsPerUser * concurrency)); defaults to 2.
+	// (num_prompts = PromptsPerUser * concurrency); defaults to 2.
 	PromptsPerUser int `json:"prompts_per_user,omitempty"`
 	// IncludeReference adds the 4k max-throughput-reference capacity family.
 	IncludeReference bool `json:"include_reference,omitempty"`

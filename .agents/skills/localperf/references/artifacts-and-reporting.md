@@ -67,7 +67,6 @@ LocalPerf validates at all of these boundaries:
 - spec hashes;
 - allowed workload roles;
 - explicit context evidence;
-- benchmark sample floors;
 - declared concurrency ladders;
 - completed request and token counts;
 - throughput fields and metric rows;
@@ -154,7 +153,7 @@ Only `benchmark` workloads enter report and comparison queries. A diagnostic
 probe may preserve useful startup, endpoint, or kernel evidence, but it cannot
 become a benchmark by changing its label after execution.
 
-Ordinary benchmark workloads require at least `max(8, 2 * concurrency)` requests for every measurement point. A workload with the `fixed_batches` sampling claim instead requires exactly `batches_per_repeat * concurrency` requests at every point. The artifact checker rejects undersampled ordinary rows and inconsistent fixed-batch rows even if the original spec slipped through.
+Artifacts record the request count resolved from `num_prompts` or `prompts_per_user`, and the checker verifies exact completed and failed request counts for each measurement.
 
 ## Core tables
 

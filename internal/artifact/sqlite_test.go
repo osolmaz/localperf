@@ -29,7 +29,7 @@ func TestCheckExactSchemaRejectsExtraColumns(t *testing.T) {
 	}
 }
 
-func TestCheckWorkloadContractsRejectsUndersampledBenchmark(t *testing.T) {
+func TestCheckWorkloadContractsAllowsSmallBenchmarkSamples(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -41,24 +41,13 @@ func TestCheckWorkloadContractsRejectsUndersampledBenchmark(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO run (id, name, status, created_at) VALUES ('run', 'run', 'completed', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	insert := func(name, role string, samples int) {
-		t.Helper()
-		if _, err := db.Exec(`INSERT INTO workloads (
-			id, run_id, name, role, traffic_json, concurrency_json, samples, metadata_json
-		) VALUES (?, 'run', ?, ?, '{}', '[4]', ?, '{"context":{"target":4096,"semantics":"active"}}')`, name, name, role, samples); err != nil {
-			t.Fatal(err)
-		}
-	}
-	insert("diagnostic", "diagnostic", 1)
-	if err := checkWorkloadContracts(db); err != nil {
-		t.Fatalf("diagnostic workload: %v", err)
-	}
-	insert("benchmark", "benchmark", 7)
-	if err := checkWorkloadContracts(db); err == nil || !strings.Contains(err.Error(), "workload points below") {
-		t.Fatalf("checkWorkloadContracts = %v, want workload sample floor rejection", err)
-	}
-	if _, err := db.Exec(`UPDATE workloads SET samples = 8 WHERE id = 'benchmark'`); err != nil {
+	if _, err := db.Exec(`INSERT INTO workloads (
+		id, run_id, name, role, traffic_json, concurrency_json, samples, metadata_json
+	) VALUES ('benchmark', 'run', 'benchmark', 'benchmark', '{}', '[4]', 1, '{"context":{"target":4096,"semantics":"active"}}')`); err != nil {
 		t.Fatal(err)
+	}
+	if err := checkWorkloadContracts(db); err != nil {
+		t.Fatalf("small benchmark workload: %v", err)
 	}
 	if _, err := db.Exec(`UPDATE workloads SET metadata_json = NULL WHERE id = 'benchmark'`); err != nil {
 		t.Fatal(err)
@@ -74,55 +63,17 @@ func TestCheckWorkloadContractsRejectsUndersampledBenchmark(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO measurements (
 		run_id, profile_id, workload_id, concurrency, samples_requested, status
-	) VALUES ('run', 'profile', 'benchmark', 4, 7, 'completed')`); err != nil {
+	) VALUES ('run', 'profile', 'benchmark', 4, 1, 'completed')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkWorkloadContracts(db); err == nil || !strings.Contains(err.Error(), "measurements below") {
-		t.Fatalf("checkWorkloadContracts = %v, want measurement sample floor rejection", err)
+	if err := checkWorkloadContracts(db); err != nil {
+		t.Fatalf("small benchmark measurement: %v", err)
 	}
-	if _, err := db.Exec(`UPDATE measurements SET concurrency = 5, samples_requested = 10`); err != nil {
+	if _, err := db.Exec(`UPDATE measurements SET concurrency = 5`); err != nil {
 		t.Fatal(err)
 	}
 	if err := checkWorkloadContracts(db); err == nil || !strings.Contains(err.Error(), "declared concurrency ladder") {
 		t.Fatalf("checkWorkloadContracts = %v, want concurrency ladder rejection", err)
-	}
-}
-
-func TestCheckWorkloadContractsAllowsDeclaredFixedBatches(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(Schema); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO run (id, name, status, created_at) VALUES ('run', 'run', 'completed', '2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-	metadata := `{"context":{"target":65536,"semantics":"active"},"sampling":{"policy":"fixed_batches","batches_per_repeat":1}}`
-	if _, err := db.Exec(`INSERT INTO workloads (
-		id, run_id, name, role, traffic_json, concurrency_json, samples, metadata_json
-	) VALUES ('benchmark', 'run', 'benchmark', 'benchmark', '{}', '[1,6]', 6, ?)`, metadata); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO measurements (
-		run_id, profile_id, workload_id, concurrency, samples_requested, status
-	) VALUES ('run', 'profile', 'benchmark', 1, 1, 'completed'),
-	         ('run', 'profile', 'benchmark', 6, 6, 'completed')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := checkWorkloadContracts(db); err != nil {
-		t.Fatalf("fixed batches: %v", err)
-	}
-	if _, err := db.Exec(`UPDATE measurements SET samples_requested = 12 WHERE concurrency = 6`); err != nil {
-		t.Fatal(err)
-	}
-	if err := checkWorkloadContracts(db); err == nil || !strings.Contains(err.Error(), "inconsistent with fixed batches") {
-		t.Fatalf("checkWorkloadContracts = %v, want fixed-batch count rejection", err)
 	}
 }
 

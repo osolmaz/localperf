@@ -85,11 +85,10 @@ accept 4k or more.
 For each point, the request count is:
 
 ```text
-max(8, prompts_per_user * concurrency)
+prompts_per_user * concurrency
 ```
 
-The default `prompts_per_user` is 2. Reportable workloads cannot go below
-`max(8, 2 * concurrency)`.
+The generated default `prompts_per_user` is 2. Override it when the benchmark calls for a different number of requests per concurrent batch.
 
 Use at least three repeats for a comparison unless cost or run time makes that
 impractical. If fewer repeats are used, state the limitation. LocalPerf's
@@ -98,7 +97,7 @@ planner default is one repeat, so set `--repeats` deliberately.
 ## Practical c1/c6 64k sweep
 
 When the user requests `practical-c1-c6-64k`, follow
-[the fixed sweep definition](../../../../docs/2026-07-31-practical-c1-c6-64k.md). It replaces the default grid and default sample floor for that run. Set `batches_per_repeat: 1`: c1 contains one request and c6 contains one simultaneous six-request batch, repeated three times. Do not add other context lengths, concurrency values, reference workloads, or prefill-only points.
+[the fixed sweep definition](../../../../docs/2026-07-31-practical-c1-c6-64k.md). It replaces the default grid for that run. Set `prompts_per_user: 1`: c1 contains one request and c6 contains six requests, repeated three times. Do not add other context lengths, concurrency values, reference workloads, or prefill-only points.
 
 ## Extension decision
 
@@ -203,7 +202,7 @@ For forced-length decode:
 - verify endpoint usage and finish reasons;
 - reject early stops instead of scaling or estimating their throughput.
 
-A request for 1,024 tokens is not evidence that 1,024 tokens were generated. When client-side random-token lengths do not survive endpoint retokenization, calibrate with a diagnostic request, declare `measured_input_tokens_expected`, and still validate the final point from endpoint usage.
+A request for 1,024 tokens is not evidence that 1,024 tokens were generated.
 
 ## Safety preflight
 
@@ -259,8 +258,7 @@ Never turn dry-run rows into performance results.
 
 ## Real canary
 
-Run the smallest useful real point before the grid. A canary may be diagnostic,
-but a reportable canary must still meet the benchmark sample floor.
+Run the smallest useful real point before the grid. Label the canary diagnostic when it is not part of the declared benchmark.
 
 Check:
 

@@ -26,7 +26,7 @@ const (
 // accumulate in a single model-level file; see
 // docs/2026-07-02-default-inference-sweep.md. Re-running the same run
 // directory replaces that run's rows instead of duplicating them.
-func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string, selectedPlan ...[]PlannedRun) error {
+func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string) error {
 	if strings.TrimSpace(artifactPath) == "" {
 		return nil
 	}
@@ -34,10 +34,10 @@ func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSumm
 	if err := ValidateSpec(spec); err != nil {
 		return fmt.Errorf("refuse artifact write for invalid spec: %w", err)
 	}
-	return persistSQLiteArtifact(runDir, artifactPath, spec, summary, originalSpecPath, selectedPlan...)
+	return persistSQLiteArtifact(runDir, artifactPath, spec, summary, originalSpecPath)
 }
 
-func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string, selectedPlan ...[]PlannedRun) error {
+func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string) error {
 	createdFresh := artifactPathIsFresh(artifactPath)
 	db, err := createSQLiteArtifact(artifactPath)
 	if err != nil {
@@ -45,9 +45,6 @@ func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSu
 	}
 	defer db.Close()
 	plan := BuildPlan(spec, runDir)
-	if len(selectedPlan) > 0 {
-		plan = selectedPlan[0]
-	}
 	if err := withSQLiteTx(db, func(tx *sql.Tx) error {
 		return writeSQLiteRun(tx, runDir, spec, summary, plan, originalSpecPath)
 	}); err != nil {
@@ -457,32 +454,18 @@ func workloadSampleCount(workload Workload) int {
 func workloadClaimsJSON(workload Workload) any {
 	claims := map[string]any{}
 	if workload.ContextTarget > 0 && workload.ContextSemantics != "" {
-		claims["context"] = workloadContextClaim(workload)
+		claims["context"] = map[string]any{
+			"target":    workload.ContextTarget,
+			"semantics": workload.ContextSemantics,
+		}
 	}
 	if workload.SLO != nil {
 		claims["slo"] = workload.SLO
-	}
-	if workload.BatchesPerRepeat > 0 {
-		claims["sampling"] = map[string]any{
-			"policy":             "fixed_batches",
-			"batches_per_repeat": workload.BatchesPerRepeat,
-		}
 	}
 	if len(claims) == 0 {
 		return nil
 	}
 	return nullableJSON(claims)
-}
-
-func workloadContextClaim(workload Workload) map[string]any {
-	claim := map[string]any{
-		"target":    workload.ContextTarget,
-		"semantics": workload.ContextSemantics,
-	}
-	if workload.MeasuredInputExpected > 0 {
-		claim["measured_input_tokens_expected"] = workload.MeasuredInputExpected
-	}
-	return claim
 }
 
 func insertCanonicalDatasets(tx *sql.Tx, runID, runDir string, spec Spec) error {

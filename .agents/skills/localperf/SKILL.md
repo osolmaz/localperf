@@ -41,9 +41,9 @@ schema, validation rules, or default sweep changes.
   a run pass.
 - Use `role: "benchmark"` only for reportable points. Use
   `role: "diagnostic"` for small probes and troubleshooting.
-- A benchmark point normally needs at least `max(8, 2 * concurrency)` requests. A fixed-batch experiment may instead declare positive `batches_per_repeat`; then each point must contain exactly that many complete concurrent batches.
+- Use `num_prompts` for a fixed request count or `prompts_per_user` to scale requests with concurrency. LocalPerf does not impose a sample floor.
 - Every workload must declare `context_target` and `context_semantics`.
-- Treat requested token lengths as intent and endpoint usage counts as evidence. Use `measured_input_tokens_expected` only after a completed cross-tokenizer calibration, and start a new run when that calibration changes.
+- Treat requested token lengths as intent and endpoint usage counts as evidence.
 - Keep active context, server capacity, fresh prefill, decode, cached-prefix
   reuse, and aggregate multi-request throughput separate.
 - Keep all attempts, failures, skips, logs, telemetry, and exact commands.
@@ -203,7 +203,7 @@ localperf bench run \
   --artifact runs/models/<model-slug>.sqlite
 ```
 
-Filter a batch with repeated `--profile`, `--workload`, or `--concurrency` flags. Use `--repeat N` to execute one or more one-based repeat indexes without changing the stored spec; this is useful for bounding a long point in the foreground. Keep all batches for the same model in the same artifact.
+Filter a batch with repeated `--profile`, `--workload`, or `--concurrency` flags. Keep all batches for the same model in the same artifact.
 
 For an interrupted run, reuse the exact run directory:
 
@@ -236,7 +236,7 @@ artifact.
 A benchmark is complete only when:
 
 - all intended points are completed, failed, or skipped with reasons;
-- all reportable points meet the sample floor and exact-result checks;
+- all reportable points pass exact-result checks;
 - measured prompt and output tokens support the declared context labels;
 - the runtime and observed backend match the intended setup;
 - safety guards did not fire during a result reported as valid;

@@ -29,11 +29,7 @@ type RunOptions struct {
 	// Resume skips planned runs whose result file already exists and
 	// parses as completed with no failed requests; requires an explicit
 	// RunDir pointing at the previous attempt.
-	Resume bool
-	// RepeatIndexes selects one-based repeat numbers from the spec. Empty runs
-	// every repeat. This bounds long points without changing the benchmark
-	// contract or creating repeat-specific specs.
-	RepeatIndexes    []int
+	Resume           bool
 	OriginalSpecPath string
 }
 
@@ -142,82 +138,18 @@ func newRunSession(ctx context.Context, spec Spec, opts RunOptions) (*runSession
 	if err := prepareSessionSpec(ctx, session); err != nil {
 		return session, err
 	}
-	events, plan, err := prepareSessionExecution(session, opts)
+	events, err := openEventWriter(session.summary.EventsPath, opts.Resume)
 	if err != nil {
 		return session, err
 	}
 	session.events = events
-	session.plan = plan
+	session.plan = BuildPlan(session.spec, session.runDir)
 	session.summary.PlannedRuns = len(session.plan)
 	// A resumed attempt keeps the previous log's plan events.
 	if !opts.Resume {
 		writePlanEvents(session)
 	}
 	return session, nil
-}
-
-func prepareSessionExecution(session *runSession, opts RunOptions) (*eventWriter, []PlannedRun, error) {
-	events, err := openEventWriter(session.summary.EventsPath, opts.Resume)
-	if err != nil {
-		return nil, nil, err
-	}
-	plan, err := selectRepeatIndexes(BuildPlan(session.spec, session.runDir), opts.RepeatIndexes)
-	if err != nil {
-		_ = events.Close()
-		return nil, nil, err
-	}
-	return events, plan, nil
-}
-
-func selectRepeatIndexes(plan []PlannedRun, requested []int) ([]PlannedRun, error) {
-	if len(requested) == 0 {
-		return plan, nil
-	}
-	selected, err := repeatIndexSet(requested)
-	if err != nil {
-		return nil, err
-	}
-	filtered, found := filterPlanByRepeatIndex(plan, selected)
-	if missing := missingRepeatIndex(selected, found); missing > 0 {
-		return nil, fmt.Errorf("repeat index %d is outside the filtered spec", missing)
-	}
-	return filtered, nil
-}
-
-func repeatIndexSet(requested []int) (map[int]bool, error) {
-	selected := map[int]bool{}
-	for _, repeat := range requested {
-		if repeat <= 0 {
-			return nil, fmt.Errorf("repeat indexes must be positive")
-		}
-		if selected[repeat] {
-			return nil, fmt.Errorf("duplicate repeat index %d", repeat)
-		}
-		selected[repeat] = true
-	}
-	return selected, nil
-}
-
-func filterPlanByRepeatIndex(plan []PlannedRun, selected map[int]bool) ([]PlannedRun, map[int]bool) {
-	filtered := make([]PlannedRun, 0, len(plan))
-	found := map[int]bool{}
-	for _, planned := range plan {
-		repeat := planned.Repeat + 1
-		if selected[repeat] {
-			filtered = append(filtered, planned)
-			found[repeat] = true
-		}
-	}
-	return filtered, found
-}
-
-func missingRepeatIndex(selected, found map[int]bool) int {
-	for repeat := range selected {
-		if !found[repeat] {
-			return repeat
-		}
-	}
-	return 0
 }
 
 func prepareSessionSpec(ctx context.Context, session *runSession) error {
@@ -313,7 +245,7 @@ func (session *runSession) finish(runErr error) (RunSummary, error) {
 	if runErr == nil {
 		runErr = session.ctx.Err()
 	}
-	err := finalizeRun(session.runDir, &session.summary, session.events, session.spec, session.plan, session.opts.OriginalSpecPath, runErr)
+	err := finalizeRun(session.runDir, &session.summary, session.events, session.spec, session.opts.OriginalSpecPath, runErr)
 	return session.summary, err
 }
 
@@ -486,7 +418,7 @@ func (session *runSession) writeArtifactSnapshot() {
 	}
 	snapshot := session.summary
 	snapshot.InProgress = true
-	if err := writeSQLiteArtifact(session.runDir, snapshot.ArtifactPath, session.spec, snapshot, session.opts.OriginalSpecPath, session.plan); err != nil {
+	if err := writeSQLiteArtifact(session.runDir, snapshot.ArtifactPath, session.spec, snapshot, session.opts.OriginalSpecPath); err != nil {
 		session.events.Write(Event{Timestamp: time.Now().UTC(), Type: "artifact_snapshot_failed", Error: err.Error()})
 	}
 }
@@ -577,7 +509,7 @@ func (session *runSession) stopFinishedProfile(profile Profile, proc *serverProc
 	}
 }
 
-func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec Spec, plan []PlannedRun, originalSpecPath string, runErr error) error {
+func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec Spec, originalSpecPath string, runErr error) error {
 	summary.FinishedAt = time.Now().UTC()
 	if runErr != nil {
 		summary.Error = runErr.Error()
@@ -586,7 +518,7 @@ func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec S
 	if err := writeJSONFile(filepath.Join(runDir, "summary.json"), summary); err != nil {
 		return err
 	}
-	if err := writeFinalArtifact(runDir, summary, spec, plan, originalSpecPath); err != nil && runErr == nil {
+	if err := writeFinalArtifact(runDir, summary, spec, originalSpecPath); err != nil && runErr == nil {
 		return err
 	}
 	return finalRunError(*summary, runErr)
@@ -603,11 +535,11 @@ func writeRunFinishEvent(summary *RunSummary, events *eventWriter, runErr error)
 	events.Write(event)
 }
 
-func writeFinalArtifact(runDir string, summary *RunSummary, spec Spec, plan []PlannedRun, originalSpecPath string) error {
+func writeFinalArtifact(runDir string, summary *RunSummary, spec Spec, originalSpecPath string) error {
 	if summary.ArtifactPath == "" {
 		return nil
 	}
-	return writeSQLiteArtifact(runDir, summary.ArtifactPath, spec, *summary, originalSpecPath, plan)
+	return writeSQLiteArtifact(runDir, summary.ArtifactPath, spec, *summary, originalSpecPath)
 }
 
 func finalRunError(summary RunSummary, runErr error) error {

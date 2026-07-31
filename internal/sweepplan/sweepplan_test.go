@@ -303,7 +303,7 @@ func TestDefaultGridUsesShortDecodeAndScaledPrompts(t *testing.T) {
 	if decode.PromptsPerUser != 2 {
 		t.Fatalf("prompts_per_user = %d, want 2 by default", decode.PromptsPerUser)
 	}
-	// Planned runs resolve prompts per concurrency: c1 -> floor 8, c16 -> 32.
+	// Planned runs resolve prompts directly from prompts_per_user.
 	plan := vllmbench.BuildPlan(spec, "runs/example")
 	prompts := map[int]int{}
 	for _, planned := range plan {
@@ -311,8 +311,8 @@ func TestDefaultGridUsesShortDecodeAndScaledPrompts(t *testing.T) {
 			prompts[planned.Concurrency] = planned.Workload.NumPrompts
 		}
 	}
-	if prompts[1] != 8 || prompts[4] != 8 || prompts[16] != 32 {
-		t.Fatalf("resolved prompts = %v, want map[1:8 4:8 16:32]", prompts)
+	if prompts[1] != 2 || prompts[4] != 8 || prompts[16] != 32 {
+		t.Fatalf("resolved prompts = %v, want map[1:2 4:8 16:32]", prompts)
 	}
 }
 
