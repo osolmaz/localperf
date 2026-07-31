@@ -270,6 +270,7 @@ type SQLiteReportThroughputGroup struct {
 }
 
 type SQLiteReportFullRunTimingRow struct {
+	MeasurementID               int64
 	Profile                     string
 	Workload                    string
 	ContextLabel                string
@@ -1332,6 +1333,7 @@ func sqliteReportFullRunTimingRows(doc SQLiteReportDocument) []SQLiteReportFullR
 		}
 		failureLabel, failureReason := measurementFailure(measurement)
 		rows = append(rows, SQLiteReportFullRunTimingRow{
+			MeasurementID:               measurement.ID,
 			Profile:                     measurement.Profile,
 			Workload:                    measurement.Workload,
 			ContextLabel:                measurement.ContextLabel,

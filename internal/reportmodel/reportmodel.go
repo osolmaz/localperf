@@ -61,7 +61,33 @@ type MetadataItem struct {
 }
 
 type ThroughputResponse struct {
-	Tables []ThroughputTable `json:"tables"`
+	Tables        []ThroughputTable  `json:"tables"`
+	FullRunTiming []FullRunTimingRow `json:"full_run_timing,omitempty"`
+}
+
+type FullRunTimingRow struct {
+	MeasurementID                      int64  `json:"measurement_id"`
+	Profile                            string `json:"profile"`
+	Workload                           string `json:"workload"`
+	ContextLabel                       string `json:"context_label"`
+	Concurrency                        int    `json:"concurrency"`
+	RepeatCount                        int    `json:"repeat_count"`
+	OutputTokS                         string `json:"output_tok_s"`
+	OutputTokSDisplay                  string `json:"output_tok_s_display"`
+	EffectivePrefillTokS               string `json:"effective_prefill_tok_s"`
+	EffectivePrefillTokSDisplay        string `json:"effective_prefill_tok_s_display"`
+	RequestEffectivePrefillTokS        string `json:"request_effective_prefill_tok_s"`
+	RequestEffectivePrefillTokSDisplay string `json:"request_effective_prefill_tok_s_display"`
+	TTFTMeanMS                         string `json:"ttft_mean_ms"`
+	TTFTMeanDisplay                    string `json:"ttft_mean_display"`
+	TTFTP99MS                          string `json:"ttft_p99_ms"`
+	TTFTP99Display                     string `json:"ttft_p99_display"`
+	DecodePerUserTokS                  string `json:"decode_per_user_tok_s"`
+	DecodePerUserTokSDisplay           string `json:"decode_per_user_tok_s_display"`
+	LatencyP95MS                       string `json:"latency_p95_ms"`
+	LatencyP95Display                  string `json:"latency_p95_display"`
+	OK                                 int    `json:"ok"`
+	Err                                int    `json:"err"`
 }
 
 type ThroughputTable struct {
@@ -175,9 +201,43 @@ func Build(path string, doc report.SQLiteReportDocument) Document {
 			ContextStatusCounts: contextStatusCounts(tables),
 			Legend:              doc.Legend,
 		},
-		Throughput: ThroughputResponse{Tables: tables},
-		Details:    details,
+		Throughput: ThroughputResponse{
+			Tables:        tables,
+			FullRunTiming: fullRunTimingRows(doc.FullRunTimingRows),
+		},
+		Details: details,
 	}
+}
+
+func fullRunTimingRows(rows []report.SQLiteReportFullRunTimingRow) []FullRunTimingRow {
+	out := make([]FullRunTimingRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, FullRunTimingRow{
+			MeasurementID:                      row.MeasurementID,
+			Profile:                            row.Profile,
+			Workload:                           row.Workload,
+			ContextLabel:                       row.ContextLabel,
+			Concurrency:                        row.Concurrency,
+			RepeatCount:                        row.RepeatCount,
+			OutputTokS:                         row.OutputTokS,
+			OutputTokSDisplay:                  report.FormatRateDisplay(row.OutputTokS),
+			EffectivePrefillTokS:               row.EffectivePrefillTokS,
+			EffectivePrefillTokSDisplay:        report.FormatRateDisplay(row.EffectivePrefillTokS),
+			RequestEffectivePrefillTokS:        row.RequestEffectivePrefillTokS,
+			RequestEffectivePrefillTokSDisplay: report.FormatRateDisplay(row.RequestEffectivePrefillTokS),
+			TTFTMeanMS:                         row.TTFTMeanMS,
+			TTFTMeanDisplay:                    report.FormatDurationDisplay(row.TTFTMeanMS),
+			TTFTP99MS:                          row.TTFTP99MS,
+			TTFTP99Display:                     report.FormatDurationDisplay(row.TTFTP99MS),
+			DecodePerUserTokS:                  row.DecodePerUserTokS,
+			DecodePerUserTokSDisplay:           report.FormatRateDisplay(row.DecodePerUserTokS),
+			LatencyP95MS:                       row.LatencyP95MS,
+			LatencyP95Display:                  report.FormatDurationDisplay(row.LatencyP95MS),
+			OK:                                 row.CompletedRequests,
+			Err:                                row.FailedRequests,
+		})
+	}
+	return out
 }
 
 func buildThroughputTables(doc report.SQLiteReportDocument, details map[int64]CellDetail) []ThroughputTable {

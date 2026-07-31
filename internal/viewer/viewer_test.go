@@ -122,6 +122,13 @@ func TestHandlerServesJSONAPIs(t *testing.T) {
 	if row.Decode.MeasurementID == row.Prefill.MeasurementID {
 		t.Fatalf("decode and prefill measurement IDs should differ: %+v", row)
 	}
+	if len(throughput.FullRunTiming) != 1 {
+		t.Fatalf("full-run timing rows = %d, want 1", len(throughput.FullRunTiming))
+	}
+	fullRun := throughput.FullRunTiming[0]
+	if fullRun.EffectivePrefillTokSDisplay != "1600" || fullRun.DecodePerUserTokSDisplay != "40.0" {
+		t.Fatalf("full-run timing = %+v, want effective prefill 1600 and decode/user 40.0", fullRun)
+	}
 
 	var detail reportmodel.CellDetail
 	getJSON(t, server.URL+"/api/reports/"+reportID+"/measurements/"+strconv.FormatInt(row.Decode.MeasurementID, 10), &detail)
@@ -263,6 +270,7 @@ func createViewerArtifactRows(t *testing.T, db *sql.DB, name string) {
 	decodePhaseID := insertViewerPhase(t, db, runID, "decode-workload", createdAt)
 	decodeMeasurementID := insertViewerMeasurement(t, db, runID, "decode-workload", decodePhaseID, createdAt, 2048, 256.0, 64.0)
 	insertViewerMetric(t, db, decodeMeasurementID)
+	insertViewerFullRunMetrics(t, db, decodeMeasurementID)
 	prefillPhaseID := insertViewerPhase(t, db, runID, "prefill-workload", createdAt)
 	prefillMeasurementID := insertViewerMeasurement(t, db, runID, "prefill-workload", prefillPhaseID, createdAt, 64, 32.0, 8.0)
 	insertViewerMetric(t, db, prefillMeasurementID)
@@ -320,6 +328,20 @@ func insertViewerMeasurement(t *testing.T, db *sql.DB, runID, workloadID string,
 		t.Fatal(err)
 	}
 	return id
+}
+
+func insertViewerFullRunMetrics(t *testing.T, db *sql.DB, measurementID int64) {
+	t.Helper()
+	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}' WHERE id = ?`, measurementID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO metric_stats (measurement_id, metric, unit, mean, count) VALUES
+		(?, 'effective_prefill_throughput', 'tok/s', 1600, 1),
+		(?, 'request_effective_prefill_throughput', 'tok/s', 800, 4),
+		(?, 'request_decode_throughput', 'tok/s', 40, 4)`,
+		measurementID, measurementID, measurementID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func insertViewerMetric(t *testing.T, db *sql.DB, measurementID int64) {
