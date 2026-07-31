@@ -70,9 +70,28 @@ func TestBuildKeepsDecodeWorkloadsSeparateWhenShapesMatch(t *testing.T) {
 	}
 	for _, table := range tables {
 		row := table.Rows[0]
+		if table.DecodeWorkload != row.Decode.Workload {
+			t.Fatalf("table workload = %q, row workload = %q", table.DecodeWorkload, row.Decode.Workload)
+		}
 		if row.Decode.Workload != row.Prefill.Workload {
 			t.Fatalf("mixed decode/prefill workloads: %+v", row)
 		}
+	}
+}
+
+func TestBuildKeepsDisjointDecodeWorkloadsSeparate(t *testing.T) {
+	first := throughputRow("run-1", "64k", "64k capacity", 65536, 1)
+	first.Workload = "generate-empty"
+	first.Status = "completed"
+	second := throughputRow("run-2", "64k", "64k capacity", 65536, 6)
+	second.Workload = "generate-full"
+	second.Status = "completed"
+	tables := Build("/tmp/report.sqlite", report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{first, second},
+	}).Throughput.Tables
+	if len(tables) != 2 || tables[0].DecodeWorkload == tables[1].DecodeWorkload {
+		t.Fatalf("disjoint decode workloads were merged or hidden: %+v", tables)
 	}
 }
 

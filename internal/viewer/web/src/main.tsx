@@ -57,6 +57,7 @@ type ThroughputTable = {
   model: string;
   server_limit_label: string;
   context_label?: string;
+  decode_workload?: string;
   context_status: string;
   context_status_label: string;
   warning?: string;
@@ -289,6 +290,7 @@ function ThroughputTableView({ table, reportID }: { table: ThroughputTable; repo
           <div className="subline">
             <span>Server limit {table.server_limit_label}</span>
             {table.context_label && <span>Context {table.context_label}</span>}
+            {table.decode_workload && <span>Workload {table.decode_workload}</span>}
             <span className={`status status-${table.context_status}`}>{table.context_status_label}</span>
           </div>
         </div>

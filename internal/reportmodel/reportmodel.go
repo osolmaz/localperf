@@ -75,6 +75,7 @@ type ThroughputTable struct {
 	ServerLimit        int             `json:"server_limit"`
 	ServerLimitLabel   string          `json:"server_limit_label"`
 	ContextLabel       string          `json:"context_label,omitempty"`
+	DecodeWorkload     string          `json:"decode_workload,omitempty"`
 	ContextStatus      string          `json:"context_status"`
 	ContextStatusLabel string          `json:"context_status_label"`
 	Warning            string          `json:"warning,omitempty"`
@@ -157,6 +158,7 @@ type tableBuilder struct {
 	claimSemantics      string
 	claimTarget         int
 	claimFallback       string
+	decodeWorkload      string
 	anyVerified         bool
 	completedRows       int
 	completedUnverified int
@@ -232,6 +234,9 @@ func compatibleBuilder(builders []*tableBuilder, row report.SQLiteReportThroughp
 			builder.claimKey != row.ClaimKey() {
 			continue
 		}
+		if row.Mode != "prefill" && builder.decodeWorkload != "" && builder.decodeWorkload != row.Workload {
+			continue
+		}
 		existing := builder.rows[row.Concurrency]
 		if existing == nil {
 			return builder
@@ -255,7 +260,7 @@ func newTableBuilder(row report.SQLiteReportThroughputRow, ordinal int) *tableBu
 	if title == "" {
 		title = contextLabel(row.ContextWindow)
 	}
-	return &tableBuilder{
+	builder := &tableBuilder{
 		table: ThroughputTable{
 			ID:               fmt.Sprintf("%02d-%s", ordinal, slug(title)),
 			Title:            title,
@@ -276,9 +281,18 @@ func newTableBuilder(row report.SQLiteReportThroughputRow, ordinal int) *tableBu
 		claimTarget:    row.ContextTarget,
 		claimFallback:  contextGroupLabel(row),
 	}
+	if row.Mode != "prefill" {
+		builder.decodeWorkload = row.Workload
+		builder.table.DecodeWorkload = row.Workload
+	}
+	return builder
 }
 
 func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, details map[int64]CellDetail) {
+	if source.Mode != "prefill" && builder.decodeWorkload == "" {
+		builder.decodeWorkload = source.Workload
+		builder.table.DecodeWorkload = source.Workload
+	}
 	target := builder.rows[source.Concurrency]
 	if target == nil {
 		target = &ThroughputRow{
