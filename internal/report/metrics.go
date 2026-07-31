@@ -34,7 +34,7 @@ var ReportMetrics = []MetricDef{
 		Definition: "prompt tokens across one concurrent batch divided by the time from the earliest request start to the latest streamed first token. Includes queueing, scheduling, API overhead, and overlapping decode work; tiny prompts are sensitive to fixed request overhead.",
 	},
 	{
-		Key: "per_user_tok_s", Label: "/user", Unit: "tok/s", Weighting: "per-request",
+		Key: "per_user_tok_s", Label: "/user", Unit: "tok/s", Weighting: "aggregate share",
 		Definition: "row throughput divided by concurrent users.",
 	},
 	{

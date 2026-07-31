@@ -267,6 +267,7 @@ type SQLiteReportThroughputRow struct {
 type SQLiteReportThroughputGroup struct {
 	Title          string
 	Profile        string
+	DecodeWorkload string
 	ContextSortKey int
 	ServerLimit    int
 	AxisItems      []SQLiteReportMetadataItem
@@ -2003,9 +2004,15 @@ func sqliteReportThroughputGroups(rows []SQLiteReportThroughputRow) []SQLiteRepo
 				ContextSortKey: row.ContextSortKey,
 				ServerLimit:    row.ContextWindow,
 			})
+			if row.Mode != "prefill" {
+				groups[index].DecodeWorkload = row.Workload
+			}
 			rowIndexes = append(rowIndexes, map[int]int{})
 			mismatchNotes = append(mismatchNotes, "")
 			claims = append(claims, throughputGroupClaim{semantics: row.ContextSemantics, target: row.ContextTarget, fallback: row.ContextLabel})
+		}
+		if row.Mode != "prefill" && groups[index].DecodeWorkload == "" {
+			groups[index].DecodeWorkload = row.Workload
 		}
 		if row.ContextVerified {
 			claims[index].anyVerified = true
@@ -2047,6 +2054,9 @@ func compatibleThroughputGroup(
 	source SQLiteReportThroughputRow,
 ) (int, bool) {
 	for _, index := range candidates {
+		if source.Mode != "prefill" && groups[index].DecodeWorkload != "" && groups[index].DecodeWorkload != source.Workload {
+			continue
+		}
 		rowIndex, exists := rowIndexes[index][source.Concurrency]
 		if !exists {
 			return index, true
@@ -2314,6 +2324,9 @@ func throughputGroupAxisItems(key throughputGroupKey, visibility throughputAxisV
 	if serverLimit > 0 {
 		items = append(items, SQLiteReportMetadataItem{Label: "Server limit", Value: contextLabel(serverLimit)})
 	}
+	if workload := comparisonDecodeWorkload(rows); workload != "" {
+		items = append(items, SQLiteReportMetadataItem{Label: "Workload", Value: workload})
+	}
 	if mismatchNote != "" {
 		items = append(items, SQLiteReportMetadataItem{Label: "Context mismatch", Value: mismatchNote})
 	}
@@ -2324,6 +2337,16 @@ func throughputGroupAxisItems(key throughputGroupKey, visibility throughputAxisV
 		items = append(items, SQLiteReportMetadataItem{Label: "Prefill", Value: shape})
 	}
 	return items
+}
+
+func comparisonDecodeWorkload(rows []SQLiteReportThroughputComparisonRow) string {
+	values := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.DecodeDetail.Available {
+			values = append(values, row.DecodeDetail.Workload)
+		}
+	}
+	return joinUnique(values, " / ")
 }
 
 func comparisonShapeSummary(rows []SQLiteReportThroughputComparisonRow, mode string) string {

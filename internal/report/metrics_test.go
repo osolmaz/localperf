@@ -161,8 +161,6 @@ func TestThroughputGroupsPreserveDistinctGenerationWorkloads(t *testing.T) {
 	}
 	rows := []SQLiteReportThroughputRow{
 		row("generate-empty", "same shape", 1),
-		row("generate-empty", "same shape", 6),
-		row("generate-full", "same shape", 1),
 		row("generate-full", "same shape", 6),
 	}
 	groups := sqliteReportThroughputGroups(rows)
@@ -171,14 +169,26 @@ func TestThroughputGroupsPreserveDistinctGenerationWorkloads(t *testing.T) {
 	}
 	workloads := map[string]int{}
 	for _, group := range groups {
-		if len(group.Rows) != 2 {
-			t.Fatalf("rows in group = %d, want c1 and c6: %+v", len(group.Rows), group)
+		if len(group.Rows) != 1 {
+			t.Fatalf("rows in group = %d, want one disjoint point: %+v", len(group.Rows), group)
 		}
 		workloads[group.Rows[0].DecodeDetail.Workload]++
+		if !metadataHasValue(group.AxisItems, "Workload", group.Rows[0].DecodeDetail.Workload) {
+			t.Fatalf("group does not expose workload identity: %+v", group.AxisItems)
+		}
 	}
 	if workloads["generate-empty"] != 1 || workloads["generate-full"] != 1 {
 		t.Fatalf("grouped workloads = %v, want both generation workloads preserved", workloads)
 	}
+}
+
+func metadataHasValue(items []SQLiteReportMetadataItem, label, value string) bool {
+	for _, item := range items {
+		if item.Label == label && item.Value == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGenerationPrefillRequiresStreamedTTFTSource(t *testing.T) {
