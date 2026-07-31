@@ -236,6 +236,7 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		decode.Status = "completed"
 		decode.EffectivePrefillTokS = "1600"
 		decode.EffectivePrefillPerUserTokS = "266.667"
+		decode.SLODisplay = "90% / 0.90 req/s"
 		failedPrefill := throughputRow("run-1", "64k", "64k active context", 65536, 6)
 		failedPrefill.Mode = "prefill"
 		failedPrefill.Workload = "prefill-full"
@@ -243,6 +244,7 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		failedPrefill.PerUserTokS = "failed"
 		failedPrefill.Status = "failed"
 		failedPrefill.FailureLabel = "failed"
+		failedPrefill.SLODisplay = "100% / 1.00 req/s"
 		rows := []report.SQLiteReportThroughputRow{decode, failedPrefill}
 		if dedicatedFirst {
 			rows[0], rows[1] = rows[1], rows[0]
@@ -254,6 +256,9 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		got := Build("/tmp/report.sqlite", doc).Throughput.Tables[0].Rows[0]
 		if !got.Prefill.Derived || got.Prefill.TokS != "1600" || got.Result != "6 / 0" {
 			t.Fatalf("dedicatedFirst=%v fallback = %+v", dedicatedFirst, got)
+		}
+		if got.SLO != "D 90% / 0.90 req/s" {
+			t.Fatalf("dedicatedFirst=%v SLO = %q, want only the used decode measurement", dedicatedFirst, got.SLO)
 		}
 	}
 }

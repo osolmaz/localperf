@@ -273,6 +273,7 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 		builder.rows[source.Concurrency] = target
 	}
 	metrics := phaseMetrics(source)
+	useSourceSLO := true
 	switch source.Mode {
 	case "prefill":
 		if !target.Prefill.Derived || phaseHasUsableMetric(metrics) {
@@ -280,6 +281,8 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 			if source.Shape != "" && source.Shape != "-" {
 				builder.prefillShapes[source.Shape] = struct{}{}
 			}
+		} else {
+			useSourceSLO = false
 		}
 	case "decode":
 		target.Decode = metrics
@@ -287,9 +290,15 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 			builder.decodeShapes[source.Shape] = struct{}{}
 		}
 		applyDerivedPrefillMetrics(target, source)
+		if target.Prefill.Derived {
+			target.SLO = withoutPhaseSLO(target.SLO, "P")
+		}
 	default:
 		target.Decode = metrics
 		applyDerivedPrefillMetrics(target, source)
+		if target.Prefill.Derived {
+			target.SLO = withoutPhaseSLO(target.SLO, "P")
+		}
 	}
 	target.OK = target.Decode.OK
 	target.Err = target.Decode.Err
@@ -298,7 +307,9 @@ func applyRow(builder *tableBuilder, source report.SQLiteReportThroughputRow, de
 		target.Err += target.Prefill.Err
 	}
 	target.Result = phaseResult(target)
-	target.SLO = phaseSLO(source, target.SLO)
+	if useSourceSLO {
+		target.SLO = phaseSLO(source, target.SLO)
+	}
 	if source.ContextMismatch && source.MismatchNote != "" {
 		builder.contextMismatches = append(builder.contextMismatches, source.MismatchNote)
 	}
@@ -490,6 +501,20 @@ func phaseSLO(source report.SQLiteReportThroughputRow, existing string) string {
 		return existing
 	}
 	return existing + "; " + prefix + " " + source.SLODisplay
+}
+
+func withoutPhaseSLO(existing, prefix string) string {
+	kept := make([]string, 0, 2)
+	for part := range strings.SplitSeq(existing, ";") {
+		part = strings.TrimSpace(part)
+		if part != "" && part != "-" && !strings.HasPrefix(part, prefix+" ") {
+			kept = append(kept, part)
+		}
+	}
+	if len(kept) == 0 {
+		return "-"
+	}
+	return strings.Join(kept, "; ")
 }
 
 func cellDetail(detail report.SQLiteReportCellDetail) CellDetail {
