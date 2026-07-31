@@ -159,11 +159,13 @@ p {
 .report-view,
 .table-stack {
   display: grid;
+  min-width: 0;
   gap: 10px;
 }
 
 .summary-strip,
 .table-panel {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--panel);
@@ -255,11 +257,14 @@ p {
 }
 
 .table-wrap {
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
 }
 
-table {
+.throughput-table {
   width: 100%;
+  min-width: 1040px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -431,6 +436,19 @@ td:has(.metric-trigger) {
   .shape-grid {
     grid-template-columns: 1fr;
     min-width: 0;
+  }
+
+  .throughput-table th:first-child,
+  .throughput-table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--panel);
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  .throughput-table th:first-child {
+    z-index: 2;
   }
 
   th,
