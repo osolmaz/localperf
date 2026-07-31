@@ -2156,8 +2156,20 @@ func applyDerivedPrefill(target *SQLiteReportThroughputComparisonRow, source SQL
 	target.PrefillOK = source.CompletedRequests
 	target.PrefillErr = source.FailedRequests
 	target.PrefillShape = source.Shape
-	target.PrefillDetail = source.Detail
+	target.PrefillDetail = derivedPrefillDetail(source.Detail)
 	target.PrefillDerived = true
+}
+
+func derivedPrefillDetail(detail SQLiteReportCellDetail) SQLiteReportCellDetail {
+	detail.Phase = "Prefill (generation-derived)"
+	detail.Mode = "prefill"
+	detail.Source = "generation-derived from streamed TTFT"
+	detail.Metrics = append([]SQLiteReportMetadataItem(nil), detail.Metrics...)
+	detail.Metrics = append(detail.Metrics,
+		SQLiteReportMetadataItem{Label: "Prefill source", Value: detail.Source},
+		SQLiteReportMetadataItem{Label: "Prefill formula", Value: "sum(prompt tokens) / (latest first token - earliest request start)"},
+	)
+	return detail
 }
 
 func comparisonPrefillHasUsableMetric(row SQLiteReportThroughputComparisonRow) bool {

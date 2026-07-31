@@ -348,6 +348,9 @@ func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
 		if !row.PrefillDerived || row.PrefillTokS != "1600" || row.Requests != "18 / 0" {
 			t.Fatalf("dedicatedFirst=%v fallback = %+v", dedicatedFirst, row)
 		}
+		if row.PrefillDetail.Mode != "prefill" || !strings.Contains(row.PrefillDetail.Source, "streamed TTFT") || len(row.PrefillDetail.Metrics) < 2 {
+			t.Fatalf("dedicatedFirst=%v derived detail = %+v", dedicatedFirst, row.PrefillDetail)
+		}
 	}
 }
 

@@ -115,6 +115,8 @@ type PhaseMetrics struct {
 	FailureReason      string `json:"failure_reason,omitempty"`
 	DetailURL          string `json:"detail_url,omitempty"`
 	Derived            bool   `json:"derived,omitempty"`
+	DerivedSource      string `json:"derived_source,omitempty"`
+	DerivedFormula     string `json:"derived_formula,omitempty"`
 }
 
 type CellDetail struct {
@@ -341,6 +343,8 @@ func applyDerivedPrefillMetrics(target *ThroughputRow, source report.SQLiteRepor
 		FailureReason:      source.FailureReason,
 		DetailURL:          fmt.Sprintf("measurements/%d", source.MeasurementID),
 		Derived:            true,
+		DerivedSource:      "generation-derived from streamed TTFT",
+		DerivedFormula:     "sum(prompt tokens) / (latest first token - earliest request start)",
 	}
 }
 
