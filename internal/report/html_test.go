@@ -301,6 +301,46 @@ func TestTokenThroughputMetricDisplay(t *testing.T) {
 	}
 }
 
+func TestInferQuantizationUsesServerReportedGGUFFType(t *testing.T) {
+	metadata := `{"identity":{"64k":{"models":{"data":[{"id":"model","meta":{"ftype":"Q4_K - Medium"}}]}}}}`
+	quantizations := servedQuantizationsByProfile(metadata)
+	got := inferQuantization(nil, []SQLiteReportEngine{{QuantizationsByProfile: quantizations}})
+	if got != "Q4_K - Medium" {
+		t.Fatalf("quantization = %q, want server-reported GGUF ftype", got)
+	}
+}
+
+func TestGenerationPrefillFallbackSurvivesFailedDedicatedPoint(t *testing.T) {
+	for _, dedicatedFirst := range []bool{false, true} {
+		row := emptyThroughputComparisonRow(6)
+		decode := SQLiteReportThroughputRow{
+			Mode:                        "decode",
+			EffectivePrefillTokS:        "1600",
+			EffectivePrefillPerUserTokS: "266.667",
+			TTFTMeanMS:                  "100",
+			TTFTP99MS:                   "200",
+			CompletedRequests:           18,
+			Detail:                      SQLiteReportCellDetail{Available: true},
+		}
+		failedPrefill := SQLiteReportThroughputRow{
+			Mode:           "prefill",
+			ThroughputTokS: "failed",
+			FailureLabel:   "failed",
+			Detail:         SQLiteReportCellDetail{Available: true, FailureLabel: "failed"},
+		}
+		if dedicatedFirst {
+			applyThroughputComparisonSource(&row, failedPrefill)
+			applyThroughputComparisonSource(&row, decode)
+		} else {
+			applyThroughputComparisonSource(&row, decode)
+			applyThroughputComparisonSource(&row, failedPrefill)
+		}
+		if !row.PrefillDerived || row.PrefillTokS != "1600" || row.Requests != "18 / 0" {
+			t.Fatalf("dedicatedFirst=%v fallback = %+v", dedicatedFirst, row)
+		}
+	}
+}
+
 func TestCompactMillisecondsDisplay(t *testing.T) {
 	for _, tc := range []struct {
 		value string

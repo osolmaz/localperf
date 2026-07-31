@@ -88,7 +88,8 @@ type SQLiteReportEngine struct {
 	// ServedModelsByProfile lists every model the server reported per
 	// probed profile, from the engine identity stored under
 	// metadata_json.identity. Multi-model servers report all of them.
-	ServedModelsByProfile map[string][]string
+	ServedModelsByProfile  map[string][]string
+	QuantizationsByProfile map[string][]string
 }
 
 type SQLiteReportProfile struct {
@@ -720,6 +721,7 @@ func loadSQLiteReportEngines(db *sql.DB, doc *SQLiteReportDocument) error {
 		}
 		engine.Managed = managed != 0
 		engine.ServedModelsByProfile = servedModelsByProfile(metadataJSON)
+		engine.QuantizationsByProfile = servedQuantizationsByProfile(metadataJSON)
 		doc.Engines = append(doc.Engines, engine)
 	}
 	return rows.Err()
@@ -747,6 +749,32 @@ func servedModelsByProfile(metadataJSON string) map[string][]string {
 		}
 	}
 	return served
+}
+
+func servedQuantizationsByProfile(metadataJSON string) map[string][]string {
+	var metadata struct {
+		Identity map[string]struct {
+			Models struct {
+				Data []struct {
+					Meta struct {
+						FType string `json:"ftype"`
+					} `json:"meta"`
+				} `json:"data"`
+			} `json:"models"`
+		} `json:"identity"`
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return nil
+	}
+	quantizations := map[string][]string{}
+	for profile, identity := range metadata.Identity {
+		for _, model := range identity.Models.Data {
+			if model.Meta.FType != "" {
+				quantizations[profile] = append(quantizations[profile], model.Meta.FType)
+			}
+		}
+	}
+	return quantizations
 }
 
 func loadSQLiteReportProfiles(db *sql.DB, doc *SQLiteReportDocument) error {
@@ -1463,7 +1491,7 @@ func sqliteReportMetadataItems(doc SQLiteReportDocument) []SQLiteReportMetadataI
 		{Label: "Engine", Value: joinUnique(engineSummaries(doc.Engines), ", ")},
 		{Label: "Runs", Value: fmt.Sprint(len(doc.Runs))},
 		{Label: "Hardware", Value: bench.FirstNonEmpty(doc.Run.Hardware, "-")},
-		{Label: "Quant", Value: bench.FirstNonEmpty(inferQuantization(doc.Profiles), "-")},
+		{Label: "Quant", Value: bench.FirstNonEmpty(inferQuantization(doc.Profiles, doc.Engines), "-")},
 		{Label: "KV", Value: bench.FirstNonEmpty(joinUnique(profileKVDtypes(doc.Profiles), ", "), "-")},
 		// Active contexts come only from declared-and-verified claims; the
 		// server limit is reported separately and never as a context.
@@ -2050,6 +2078,9 @@ func emptyThroughputComparisonRow(concurrency int) SQLiteReportThroughputCompari
 func applyThroughputComparisonSource(target *SQLiteReportThroughputComparisonRow, source SQLiteReportThroughputRow) {
 	switch source.Mode {
 	case "prefill":
+		if target.PrefillDerived && !throughputRowHasUsableMetric(source) {
+			break
+		}
 		target.PrefillTokS = source.ThroughputTokS
 		target.PrefillPerUserTokS = source.PerUserTokS
 		target.PrefillTTFTMeanMS = displayFailureMetric(source.TTFTMeanMS, source.FailureLabel)
@@ -2113,7 +2144,7 @@ func applyThroughputComparisonSource(target *SQLiteReportThroughputComparisonRow
 }
 
 func applyDerivedPrefill(target *SQLiteReportThroughputComparisonRow, source SQLiteReportThroughputRow) {
-	if !displayedMetricAvailable(source.EffectivePrefillTokS) || (target.PrefillDetail.Available && !target.PrefillDerived) {
+	if !displayedMetricAvailable(source.EffectivePrefillTokS) || comparisonPrefillHasUsableMetric(*target) {
 		return
 	}
 	target.PrefillTokS = source.EffectivePrefillTokS
@@ -2126,6 +2157,15 @@ func applyDerivedPrefill(target *SQLiteReportThroughputComparisonRow, source SQL
 	target.PrefillShape = source.Shape
 	target.PrefillDetail = source.Detail
 	target.PrefillDerived = true
+}
+
+func comparisonPrefillHasUsableMetric(row SQLiteReportThroughputComparisonRow) bool {
+	return row.PrefillDetail.Available && !row.PrefillDerived &&
+		row.PrefillDetail.FailureLabel == "" && displayedMetricAvailable(row.PrefillTokS)
+}
+
+func throughputRowHasUsableMetric(row SQLiteReportThroughputRow) bool {
+	return row.FailureLabel == "" && displayedMetricAvailable(row.ThroughputTokS)
 }
 
 func displayedMetricAvailable(value string) bool {
@@ -2445,8 +2485,16 @@ func engineSummaries(engines []SQLiteReportEngine) []string {
 	return values
 }
 
-func inferQuantization(profiles []SQLiteReportProfile) string {
+func inferQuantization(profiles []SQLiteReportProfile, engines []SQLiteReportEngine) string {
 	quantizations := []string{}
+	for _, engine := range engines {
+		for _, values := range engine.QuantizationsByProfile {
+			quantizations = append(quantizations, values...)
+		}
+	}
+	if len(quantizations) > 0 {
+		return joinUnique(quantizations, ", ")
+	}
 	for _, profile := range profiles {
 		model := strings.ToLower(profile.Model)
 		switch {
