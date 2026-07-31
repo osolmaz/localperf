@@ -95,6 +95,11 @@ Use at least three repeats for a comparison unless cost or run time makes that
 impractical. If fewer repeats are used, state the limitation. LocalPerf's
 planner default is one repeat, so set `--repeats` deliberately.
 
+## Practical c1/c6 64k sweep
+
+When the user requests `practical-c1-c6-64k`, follow
+[the fixed sweep definition](../../../../docs/2026-07-31-practical-c1-c6-64k.md). It replaces the default grid and default sample floor for that run. Set `batches_per_repeat: 1`: c1 contains one request and c6 contains one simultaneous six-request batch, repeated three times. Do not add other context lengths, concurrency values, reference workloads, or prefill-only points.
+
 ## Extension decision
 
 A baseline is incomplete without a recorded decision about extension.
@@ -143,8 +148,10 @@ Before launching, record:
 - tokenizer identity and served model name.
 
 Use the canonical runtime or pinned official upstream release unless the user
-explicitly approves another source. A benchmark request does not authorize a
-community image, fork, patch, or custom build.
+explicitly approves another source. Resolve runtime availability with the
+`manage-runtimes` prebuilt-first gate. A benchmark request does not authorize a
+community image, fork, patch, custom build, or any source build, including one
+from official upstream source.
 
 Do not mutate an incumbent runtime in place. Create a separately identified
 candidate when an approved experiment needs a change. Never promote a candidate
@@ -220,7 +227,9 @@ capacity, swap, and platform telemetry as separate signals.
 
 Never disable memory guards or lower the floor after a failure merely to obtain
 a result. A guard event makes the affected performance point invalid, but the
-failure and telemetry remain useful evidence.
+failure and telemetry remain useful evidence. If an unrelated workload caused
+the guard event, do not retry while that workload remains unchanged. Report the
+blocker or ask permission to pause it.
 
 ## Dry run
 

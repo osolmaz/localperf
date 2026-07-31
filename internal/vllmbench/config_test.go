@@ -56,6 +56,60 @@ func TestBuildPlanAndBenchCommand(t *testing.T) {
 	}
 }
 
+func TestSelectRepeatIndexes(t *testing.T) {
+	spec := testSpec()
+	spec.Workloads[0].Repeats = 3
+	plan := BuildPlan(spec, t.TempDir())
+	all, err := selectRepeatIndexes(plan, nil)
+	if err != nil || len(all) != len(plan) {
+		t.Fatalf("unfiltered plan length = %d, error = %v; want %d, nil", len(all), err, len(plan))
+	}
+	selected, err := selectRepeatIndexes(plan, []int{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 2 {
+		t.Fatalf("selected plan length = %d, want both concurrency points for repeat 2", len(selected))
+	}
+	for _, planned := range selected {
+		if planned.Repeat != 1 || !strings.Contains(planned.ResultFile, "__r2.json") {
+			t.Fatalf("selected plan row = %+v, want only repeat 2", planned)
+		}
+	}
+	selected, err = selectRepeatIndexes(plan, []int{1, 3})
+	if err != nil || len(selected) != 4 {
+		t.Fatalf("two-repeat plan length = %d, error = %v; want 4, nil", len(selected), err)
+	}
+	for _, invalid := range [][]int{{0}, {2, 2}, {4}} {
+		if _, err := selectRepeatIndexes(plan, invalid); err == nil {
+			t.Fatalf("selectRepeatIndexes(%v) accepted invalid selection", invalid)
+		}
+	}
+}
+
+func TestExecuteAppliesRepeatFilterBeforePersistence(t *testing.T) {
+	spec := testSpec()
+	spec.Workloads[0].Repeats = 3
+	summary, err := Execute(context.Background(), spec, RunOptions{
+		DryRun:        true,
+		RunDir:        filepath.Join(t.TempDir(), "repeat-2"),
+		RepeatIndexes: []int{2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.PlannedRuns != 2 {
+		t.Fatalf("planned runs = %d, want 2", summary.PlannedRuns)
+	}
+	if _, err := Execute(context.Background(), spec, RunOptions{
+		DryRun:        true,
+		RunDir:        filepath.Join(t.TempDir(), "repeat-4"),
+		RepeatIndexes: []int{4},
+	}); err == nil || !strings.Contains(err.Error(), "outside the filtered spec") {
+		t.Fatalf("Execute invalid repeat = %v, want rejection", err)
+	}
+}
+
 func TestLoadGeneratorAliasesAreRejected(t *testing.T) {
 	for _, alias := range []string{"vllm-bench", "vllmbench", "localperf-http", "http", "openai-http"} {
 		spec := testSpec()
@@ -117,6 +171,36 @@ func TestValidateSpecEnforcesBenchmarkSampleFloor(t *testing.T) {
 	spec.Workloads[0].PromptsPerUser = 0
 	if err := ValidateSpec(spec); err != nil {
 		t.Fatalf("ValidateSpec diagnostic probe: %v", err)
+	}
+}
+
+func TestValidateSpecAllowsFixedBatchesForDeliberateBenchmarks(t *testing.T) {
+	spec := testSpec()
+	workload := &spec.Workloads[0]
+	workload.NumPrompts = 0
+	workload.PromptsPerUser = 0
+	workload.BatchesPerRepeat = 1
+	workload.MaxConcurrency = []int{1, 6}
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatalf("ValidateSpec fixed batches: %v", err)
+	}
+
+	plan := BuildPlan(spec, t.TempDir())
+	if len(plan) != 2 {
+		t.Fatalf("plan length = %d, want 2", len(plan))
+	}
+	if plan[0].Workload.NumPrompts != 1 || plan[1].Workload.NumPrompts != 6 {
+		t.Fatalf("resolved prompts = %d, %d; want 1, 6", plan[0].Workload.NumPrompts, plan[1].Workload.NumPrompts)
+	}
+
+	workload.NumPrompts = 6
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "set exactly one") {
+		t.Fatalf("ValidateSpec mixed sample policies = %v, want rejection", err)
+	}
+	workload.NumPrompts = 0
+	workload.BatchesPerRepeat = -1
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "batches_per_repeat must not be negative") {
+		t.Fatalf("ValidateSpec negative batches = %v, want rejection", err)
 	}
 }
 
@@ -3325,7 +3409,7 @@ func TestWorkloadPromptFieldValidation(t *testing.T) {
 	spec := testSpec()
 	spec.Workloads[0].NumPrompts = 8
 	spec.Workloads[0].PromptsPerUser = 2
-	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "not both") {
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "set exactly one") {
 		t.Fatalf("ValidateSpec error = %v, want mutual exclusion", err)
 	}
 	spec.Workloads[0].NumPrompts = 0
@@ -3334,7 +3418,7 @@ func TestWorkloadPromptFieldValidation(t *testing.T) {
 		t.Fatalf("ValidateSpec error = %v, want negative rejection", err)
 	}
 	spec.Workloads[0].PromptsPerUser = 0
-	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "num_prompts or prompts_per_user") {
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "batches_per_repeat") {
 		t.Fatalf("ValidateSpec error = %v, want either-field requirement", err)
 	}
 }
@@ -3363,6 +3447,15 @@ func TestDatasetSampleCountDefaults(t *testing.T) {
 	applyWorkloadDefault(&scaled)
 	if scaled.NumPrompts != 0 {
 		t.Fatalf("num_prompts = %d, want 0 when prompts scale", scaled.NumPrompts)
+	}
+	batches := testCustomJSONLWorkload("batches", "requests.jsonl", []string{"8k"})
+	batches.Dataset.SampleCount = 0
+	batches.NumPrompts = 0
+	batches.BatchesPerRepeat = 1
+	batches.MaxConcurrency = []int{1, 6}
+	applyWorkloadDefault(&batches)
+	if batches.Dataset.SampleCount != 6 || batches.NumPrompts != 0 {
+		t.Fatalf("fixed-batch sample count = %d, num_prompts = %d; want 6, 0", batches.Dataset.SampleCount, batches.NumPrompts)
 	}
 }
 

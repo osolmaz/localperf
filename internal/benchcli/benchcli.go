@@ -315,6 +315,8 @@ func runBench(args []string) {
 	resume := flags.Bool("resume", false, "skip planned runs whose result files already completed; requires --run-dir of the previous attempt")
 	dryRun := flags.Bool("dry-run", false, "write planned artifacts without launching vLLM or benchmark commands")
 	timeout := flags.Duration("timeout", 0, "optional overall timeout, for example 2h")
+	var repeats intList
+	flags.Var(&repeats, "repeat", "one-based repeat index to run; may be repeated")
 	filterFlags := addFilterFlags(flags)
 	_ = flags.Parse(args)
 	spec := mustLoadSpec(*specPath, filterFlags.Filter())
@@ -330,6 +332,7 @@ func runBench(args []string) {
 		ArtifactPath:     *artifactPath,
 		DryRun:           *dryRun,
 		Resume:           *resume,
+		RepeatIndexes:    repeats,
 		OriginalSpecPath: *specPath,
 	})
 	fmt.Printf("run dir: %s\n", summary.RunDir)
@@ -563,13 +566,13 @@ func mustLoadSpec(path string, filter vllmbench.Filter) vllmbench.Spec {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   localperf bench plan --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--json]
-  localperf bench run  --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--dry-run] [--timeout 2h]`)
+  localperf bench run  --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--repeat 1] [--dry-run] [--timeout 2h]`)
 }
 
 func usageRoot() {
 	fmt.Fprintln(os.Stderr, `usage:
   localperf bench plan   --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--json]
-  localperf bench run    --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--dry-run] [--timeout 2h]
+  localperf bench run    --spec spec.json [--run-dir runs/example] [--profile 8k] [--workload decode-8k] [--concurrency 4] [--repeat 1] [--dry-run] [--timeout 2h]
   localperf artifact check runs/example.sqlite
   localperf artifact render runs/example.sqlite [--output runs/example.html] [--store]
   localperf artifact merge --into runs/models/model.sqlite src1.sqlite [src2.sqlite ...]

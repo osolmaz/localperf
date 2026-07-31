@@ -193,6 +193,16 @@ func phaseRank(phase string) int {
 func rowsFromRaw(rawRows []map[string]any, path string) []ReportRow {
 	rows := make([]ReportRow, 0, len(rawRows))
 	for _, raw := range rawRows {
+		promptTokens := intValue(raw, "total_input_tokens")
+		completionTokens := intValue(raw, "total_output_tokens")
+		promptTokensKnown := hasAnyKey(raw, "total_input_tokens")
+		completionTokensKnown := hasAnyKey(raw, "total_output_tokens")
+		totalTokens := intValue(raw, "total_tokens")
+		totalTokensKnown := hasAnyKey(raw, "total_tokens")
+		if !totalTokensKnown && promptTokensKnown && completionTokensKnown {
+			totalTokens = promptTokens + completionTokens
+			totalTokensKnown = true
+		}
 		row := ReportRow{
 			DatasetName:        stringValue(raw, "dataset_name"),
 			Concurrency:        intValue(raw, "max_concurrency"),
@@ -202,9 +212,9 @@ func rowsFromRaw(rawRows []map[string]any, path string) []ReportRow {
 			RandomOutputLen:    intValue(raw, "random_output_len"),
 			Completed:          intValue(raw, "completed"),
 			Failed:             intValue(raw, "failed"),
-			PromptTokens:       intValue(raw, "total_input_tokens"),
-			CompletionTokens:   intValue(raw, "total_output_tokens"),
-			TotalTokens:        intValue(raw, "total_tokens"),
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			TotalTokens:        totalTokens,
 			DurationSeconds:    floatValue(raw, "duration"),
 			OutputTokensPerSec: floatValue(raw, "output_throughput"),
 			TotalTokensPerSec:  floatValue(raw, "total_token_throughput"),
@@ -222,9 +232,9 @@ func rowsFromRaw(rawRows []map[string]any, path string) []ReportRow {
 			P99LatencyMillis:   floatValue(raw, "p99_latency_ms"),
 			ResultFile:         path,
 
-			promptTokensKnown:       hasAnyKey(raw, "total_input_tokens"),
-			completionTokensKnown:   hasAnyKey(raw, "total_output_tokens"),
-			totalTokensKnown:        hasAnyKey(raw, "total_tokens"),
+			promptTokensKnown:       promptTokensKnown,
+			completionTokensKnown:   completionTokensKnown,
+			totalTokensKnown:        totalTokensKnown,
 			outputTokensPerSecKnown: hasAnyKey(raw, "output_throughput"),
 			totalTokensPerSecKnown:  hasAnyKey(raw, "total_token_throughput"),
 		}

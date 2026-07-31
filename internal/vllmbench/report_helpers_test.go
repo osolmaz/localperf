@@ -52,6 +52,27 @@ func TestParseResultFileRequiresCanonicalObject(t *testing.T) {
 	}
 }
 
+func TestParseResultFileDerivesExactTotalTokens(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vllm-result.json")
+	writeFile(t, path, `{"max_concurrency":1,"completed":4,"failed":0,"total_input_tokens":1014,"total_output_tokens":64,"duration":1.7,"output_throughput":37.5,"total_token_throughput":633}`)
+
+	rows, err := parseResultFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.TotalTokens != 1078 || !row.totalTokensKnown {
+		t.Fatalf("total tokens = %d, known = %v; want 1078, true", row.TotalTokens, row.totalTokensKnown)
+	}
+	if err := validateResultPoint(row, "workload", 4, 1); err != nil {
+		t.Fatalf("current vLLM result rejected: %v", err)
+	}
+}
+
 func TestReportTrafficLengthHelpers(t *testing.T) {
 	customOutput := 77
 	shareGPTOutput := 88

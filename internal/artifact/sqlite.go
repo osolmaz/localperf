@@ -336,11 +336,32 @@ func checkWorkloadContracts(db *sql.DB) error {
 	if invalid != 0 {
 		return fmt.Errorf("workloads with invalid context semantics = %d", invalid)
 	}
+	var invalidSampling int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM workloads
+		WHERE json_type(metadata_json, '$.sampling') IS NOT NULL
+		  AND (COALESCE(json_extract(metadata_json, '$.sampling.policy'), '') <> 'fixed_batches'
+		    OR COALESCE(json_type(metadata_json, '$.sampling.batches_per_repeat'), '') <> 'integer'
+		    OR COALESCE(json_extract(metadata_json, '$.sampling.batches_per_repeat'), 0) <= 0)`).Scan(&invalidSampling); err != nil {
+		return err
+	}
+	if invalidSampling != 0 {
+		return fmt.Errorf("workloads with invalid sampling policy = %d", invalidSampling)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM workloads AS workload
+		WHERE COALESCE(json_extract(workload.metadata_json, '$.sampling.policy'), '') = 'fixed_batches'
+		  AND workload.samples <> COALESCE(json_extract(workload.metadata_json, '$.sampling.batches_per_repeat'), 0)
+		    * COALESCE((SELECT MAX(CAST(point.value AS INTEGER)) FROM json_each(workload.concurrency_json) AS point), 0)`).Scan(&invalidSampling); err != nil {
+		return err
+	}
+	if invalidSampling != 0 {
+		return fmt.Errorf("fixed-batch workloads with inconsistent sample count = %d", invalidSampling)
+	}
 	var undersampled int
 	if err := db.QueryRow(`SELECT COUNT(*)
 		FROM workloads AS workload
 		JOIN json_each(workload.concurrency_json) AS point
 		WHERE workload.role = 'benchmark'
+		  AND COALESCE(json_extract(workload.metadata_json, '$.sampling.policy'), '') <> 'fixed_batches'
 		  AND workload.samples < max(8, 2 * CAST(point.value AS INTEGER))`).Scan(&undersampled); err != nil {
 		return err
 	}
@@ -351,11 +372,15 @@ func checkWorkloadContracts(db *sql.DB) error {
 		FROM measurements AS measurement
 		JOIN workloads AS workload ON workload.id = measurement.workload_id
 		WHERE workload.role = 'benchmark'
-		  AND measurement.samples_requested < max(8, 2 * measurement.concurrency)`).Scan(&undersampled); err != nil {
+		  AND ((COALESCE(json_extract(workload.metadata_json, '$.sampling.policy'), '') <> 'fixed_batches'
+		      AND measurement.samples_requested < max(8, 2 * measurement.concurrency))
+		    OR (COALESCE(json_extract(workload.metadata_json, '$.sampling.policy'), '') = 'fixed_batches'
+		      AND measurement.samples_requested <> COALESCE(json_extract(workload.metadata_json, '$.sampling.batches_per_repeat'), 0)
+		        * measurement.concurrency))`).Scan(&undersampled); err != nil {
 		return err
 	}
 	if undersampled != 0 {
-		return fmt.Errorf("benchmark measurements below the minimum sample count = %d", undersampled)
+		return fmt.Errorf("benchmark measurements below the minimum or inconsistent with fixed batches = %d", undersampled)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*)
 		FROM measurements AS measurement

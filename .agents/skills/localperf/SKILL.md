@@ -18,9 +18,10 @@ Work from the repository root. Check these sources in order:
 2. `localperf <command> --help` for the installed command surface.
 3. `README.md` for the current supported workflow.
 4. `docs/2026-07-02-default-inference-sweep.md` for the default grid.
-5. `docs/2026-07-02-context-semantics.md` for active versus capacity context.
-6. `docs/2026-06-23-measurement-methods.md` for metrics and memory labels.
-7. `docs/2026-06-29-sqlite-run-artifact-format.md` for artifact rules.
+5. `docs/2026-07-31-practical-c1-c6-64k.md` when that fixed sweep is requested.
+6. `docs/2026-07-02-context-semantics.md` for active versus capacity context.
+7. `docs/2026-06-23-measurement-methods.md` for metrics and memory labels.
+8. `docs/2026-06-29-sqlite-run-artifact-format.md` for artifact rules.
 
 Read [CLI and spec reference](references/cli-and-spec.md) when creating or
 editing a spec. Read [Benchmark protocol](references/benchmark-protocol.md)
@@ -40,7 +41,7 @@ schema, validation rules, or default sweep changes.
   a run pass.
 - Use `role: "benchmark"` only for reportable points. Use
   `role: "diagnostic"` for small probes and troubleshooting.
-- A benchmark point needs at least `max(8, 2 * concurrency)` requests.
+- A benchmark point normally needs at least `max(8, 2 * concurrency)` requests. A fixed-batch experiment may instead declare positive `batches_per_repeat`; then each point must contain exactly that many complete concurrent batches.
 - Every workload must declare `context_target` and `context_semantics`.
 - Treat requested token lengths as intent and endpoint usage counts as evidence.
 - Keep active context, server capacity, fresh prefill, decode, cached-prefix
@@ -50,8 +51,13 @@ schema, validation rules, or default sweep changes.
 - Use one SQLite artifact and one rendered HTML report per model.
 - Run full artifact validation before reading, merging, rendering, comparing,
   or publishing an artifact.
+- Resolve runtimes through the `manage-runtimes` prebuilt-first gate. A
+  benchmark request does not authorize compiling a runtime from source.
 - Stop if the runtime, model revision, quantization, kernel, backend, or package
   differs from the approved setup. Do not silently fall back or substitute.
+- If an unrelated workload causes a memory guard failure, do not retry while
+  that workload remains unchanged. Report the blocker or ask permission to
+  pause it.
 - A configured backend is not proof that it ran. Require evidence from a real
   measured request and preserve the supporting server log or trace.
 - Never put credentials in specs, logs, commands, reports, or chat output.
@@ -197,8 +203,7 @@ localperf bench run \
   --artifact runs/models/<model-slug>.sqlite
 ```
 
-Filter a batch with repeated `--profile`, `--workload`, or `--concurrency`
-flags. Keep all batches for the same model in the same artifact.
+Filter a batch with repeated `--profile`, `--workload`, or `--concurrency` flags. Use `--repeat N` to execute one or more one-based repeat indexes without changing the stored spec; this is useful for bounding a long point in the foreground. Keep all batches for the same model in the same artifact.
 
 For an interrupted run, reuse the exact run directory:
 

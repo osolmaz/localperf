@@ -199,6 +199,7 @@ type Workload struct {
 	Profiles                []string    `json:"profiles,omitempty"`
 	NumPrompts              int         `json:"num_prompts"`
 	PromptsPerUser          int         `json:"prompts_per_user,omitempty"`
+	BatchesPerRepeat        int         `json:"batches_per_repeat,omitempty"`
 	Repeats                 int         `json:"repeats,omitempty"`
 	MaxConcurrency          []int       `json:"max_concurrency"`
 	Stream                  *bool       `json:"stream,omitempty"`
@@ -425,7 +426,7 @@ func applyDatasetDefaults(workload *Workload) {
 	if workload.Dataset.SampleCount <= 0 {
 		workload.Dataset.SampleCount = defaultDatasetSampleCount(*workload)
 	}
-	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && workload.Dataset.SampleCount > 0 {
+	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && workload.BatchesPerRepeat <= 0 && workload.Dataset.SampleCount > 0 {
 		workload.NumPrompts = workload.Dataset.SampleCount
 	}
 }
@@ -436,7 +437,7 @@ func defaultDatasetSampleCount(workload Workload) int {
 	if workload.NumPrompts > 0 {
 		return workload.NumPrompts
 	}
-	if workload.PromptsPerUser > 0 {
+	if workload.PromptsPerUser > 0 || workload.BatchesPerRepeat > 0 {
 		return resolvedNumPrompts(workload, largestConcurrency(workload))
 	}
 	return 0
@@ -1056,7 +1057,7 @@ func validateWorkloadRole(prefix string, workload Workload) []string {
 }
 
 func validateWorkloadSamplePolicy(prefix string, workload Workload) []string {
-	if workload.Role != WorkloadRoleBenchmark {
+	if workload.Role != WorkloadRoleBenchmark || workload.BatchesPerRepeat > 0 {
 		return nil
 	}
 	var issues []string
@@ -1083,14 +1084,18 @@ func validateWorkloadDatasetName(prefix string, workload Workload) []string {
 
 func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	var issues []string
-	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 {
-		issues = append(issues, prefix+": num_prompts or prompts_per_user must be positive")
+	policies := boolToInt(workload.NumPrompts > 0) + boolToInt(workload.PromptsPerUser > 0) + boolToInt(workload.BatchesPerRepeat > 0)
+	if policies == 0 {
+		issues = append(issues, prefix+": num_prompts, prompts_per_user, or batches_per_repeat must be positive")
 	}
-	if workload.NumPrompts > 0 && workload.PromptsPerUser > 0 {
-		issues = append(issues, prefix+": set either num_prompts (fixed) or prompts_per_user (scales with concurrency), not both")
+	if policies > 1 {
+		issues = append(issues, prefix+": set exactly one of num_prompts, prompts_per_user, or batches_per_repeat")
 	}
 	if workload.PromptsPerUser < 0 {
 		issues = append(issues, prefix+": prompts_per_user must not be negative")
+	}
+	if workload.BatchesPerRepeat < 0 {
+		issues = append(issues, prefix+": batches_per_repeat must not be negative")
 	}
 	if workload.Repeats <= 0 {
 		issues = append(issues, prefix+": repeats must be positive")
@@ -1351,14 +1356,20 @@ func buildPlannedRun(runDir string, profile Profile, workload Workload, concurre
 	}
 }
 
-// minPromptsPerPoint is the sample floor per measurement: fewer requests
-// trades hours for noise the ± spreads would only confirm.
+// minPromptsPerPoint is the default sample floor per measurement: fewer
+// requests trades hours for noise the ± spreads would only confirm. Deliberate
+// fixed-batch workloads instead declare batches_per_repeat and use repeats as
+// their independent replication axis.
 const minPromptsPerPoint = 8
 
 // resolvedNumPrompts scales the request count with concurrency when the
-// workload declares prompts_per_user, so c1 points stop paying for c32-sized
-// sample counts.
+// workload declares prompts_per_user or batches_per_repeat. Fixed batches do
+// not receive the default statistical floor: one c6 batch is exactly six
+// simultaneous requests.
 func resolvedNumPrompts(workload Workload, concurrency int) int {
+	if workload.BatchesPerRepeat > 0 {
+		return workload.BatchesPerRepeat * concurrency
+	}
 	if workload.PromptsPerUser <= 0 {
 		return workload.NumPrompts
 	}

@@ -154,14 +154,7 @@ Only `benchmark` workloads enter report and comparison queries. A diagnostic
 probe may preserve useful startup, endpoint, or kernel evidence, but it cannot
 become a benchmark by changing its label after execution.
 
-Benchmark workloads require at least:
-
-```text
-max(8, 2 * concurrency)
-```
-
-requests for every measurement point. The artifact checker rejects
-undersampled benchmark rows even if the original spec slipped through.
+Ordinary benchmark workloads require at least `max(8, 2 * concurrency)` requests for every measurement point. A workload with the `fixed_batches` sampling claim instead requires exactly `batches_per_repeat * concurrency` requests at every point. The artifact checker rejects undersampled ordinary rows and inconsistent fixed-batch rows even if the original spec slipped through.
 
 ## Core tables
 

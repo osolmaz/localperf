@@ -107,6 +107,7 @@ localperf bench run --spec spec.json [flags]
 | `--profile` | Include one profile. Repeatable. |
 | `--workload` | Include one workload. Repeatable. |
 | `--concurrency` | Include one concurrency value. Repeatable. |
+| `--repeat` | Include one one-based repeat index. Repeatable. This filters execution without changing the stored spec. |
 
 The runner validates the full spec on load, after filters, after dataset
 preparation, immediately before execution, and before artifact persistence.
@@ -262,14 +263,12 @@ Every workload requires:
 - explicit `phase`, normally `prefill`, `decode`, or `mixed`;
 - positive `context_target`;
 - `context_semantics: "active"` or `"capacity"`;
-- one of `num_prompts` or `prompts_per_user`;
+- exactly one of `num_prompts`, `prompts_per_user`, or `batches_per_repeat`;
 - positive `repeats`;
 - a nonempty, unique `max_concurrency` list;
 - a supported load generator and dataset.
 
-For benchmark workloads, `prompts_per_user` must be at least 2 and every point
-must resolve to at least `max(8, 2 * concurrency)` prompts. Diagnostics may use
-smaller counts but are excluded from report and comparison queries.
+For ordinary benchmark workloads, `prompts_per_user` must be at least 2 and every point must resolve to at least `max(8, 2 * concurrency)` prompts. A deliberate fixed-batch benchmark may instead set positive `batches_per_repeat`; every point then resolves to exactly `batches_per_repeat * concurrency` prompts. For example, `batches_per_repeat: 1` means one request at c1 and one simultaneous six-request batch at c6. Repeats are the independent replication axis for this policy. Diagnostics may use smaller counts but are excluded from report and comparison queries.
 
 Common random-traffic fields:
 

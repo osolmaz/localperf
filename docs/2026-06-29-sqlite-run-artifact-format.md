@@ -641,8 +641,7 @@ The validator must check:
 - JSON columns contain valid JSON.
 - every workload has an allowed `role` and explicit `context_target` and
   `context_semantics` evidence.
-- every `benchmark` workload and measurement requests at least
-  `max(8, 2 * concurrency)` samples at each point.
+- every ordinary `benchmark` workload and measurement requests at least `max(8, 2 * concurrency)` samples at each point; a workload declaring fixed batches instead requests exactly `batches_per_repeat * concurrency` samples.
 - every measurement uses a concurrency declared by its workload.
 - foreign keys are valid.
 - completed measurements have throughput, token, and request counts.

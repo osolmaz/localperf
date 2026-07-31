@@ -794,11 +794,11 @@ func cloneStringMap(maps ...map[string]string) map[string]string {
 }
 
 // materializedPromptCount pins the request count for fixed workloads only:
-// scaled workloads keep resolving prompts per planned run (the materialized
-// rows already cover the largest ladder point), and pinning num_prompts
-// would trip the mutual-exclusion validation.
+// concurrency-scaled workloads keep resolving prompts per planned run (the
+// materialized rows already cover the largest ladder point), and pinning
+// num_prompts would trip the mutual-exclusion validation.
 func materializedPromptCount(workload Workload, requestCount int) int {
-	if workload.PromptsPerUser > 0 {
+	if workload.PromptsPerUser > 0 || workload.BatchesPerRepeat > 0 {
 		return 0
 	}
 	return requestCount
