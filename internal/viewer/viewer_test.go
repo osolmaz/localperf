@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,6 +53,16 @@ func TestNewHandlerServesTabbedReports(t *testing.T) {
 	} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("index missing %q:\n%s", want, indexHTML)
+		}
+	}
+	stylesheetMatch := regexp.MustCompile(`href="([^"]+\.css)"`).FindStringSubmatch(indexHTML)
+	if len(stylesheetMatch) != 2 {
+		t.Fatalf("index stylesheet link not found:\n%s", indexHTML)
+	}
+	stylesheet := getString(t, server.URL+stylesheetMatch[1])
+	for _, want := range []string{".throughput-table", "min-width:1040px", "max-width:100%", "overflow-x:auto"} {
+		if !strings.Contains(stylesheet, want) {
+			t.Fatalf("viewer stylesheet missing mobile table contract %q", want)
 		}
 	}
 

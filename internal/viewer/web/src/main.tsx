@@ -301,7 +301,7 @@ function ThroughputTableView({ table, reportID }: { table: ThroughputTable; repo
       </div>
       {table.warning && <div className="warning compact">{table.warning}</div>}
       <div className="table-wrap">
-        <table>
+        <table className="throughput-table" aria-label={`${table.title} throughput`}>
           <thead>
             {instance.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
