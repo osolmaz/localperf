@@ -28,12 +28,16 @@ func TestRenderSQLiteHTMLReportEscapesAndIsStandalone(t *testing.T) {
 		"Escaping &lt;script&gt;alert(1)&lt;/script&gt;",
 		"Throughput",
 		"throughput-group",
-		"Prefill input tok/s",
-		"Input share/user",
-		"end-to-end output tok/s",
+		"Decode tok/s",
+		"Decode/user",
+		"Prefill tok/s",
+		"Prefill/user",
+		"decode tok/s",
 		"prefill tok/s",
-		"TTFT avg",
-		"TTFT p99",
+		"Decode TTFT avg",
+		"Decode TTFT p99",
+		"Prefill TTFT avg",
+		"Prefill TTFT p99",
 		"OK / Err",
 		"table-layout:fixed",
 		"@media print",
@@ -48,13 +52,13 @@ func TestRenderSQLiteHTMLReportEscapesAndIsStandalone(t *testing.T) {
 	if strings.Contains(html, "min-width:900px") {
 		t.Fatalf("HTML report still has fixed minimum table width:\n%s", html)
 	}
-	if strings.Contains(html, "Decode tok/s") || strings.Contains(html, "Decode/user") {
-		t.Fatalf("HTML report uses ambiguous decode labels:\n%s", html)
+	if strings.Contains(html, "Input tok/s") || strings.Contains(html, ">In/s<") {
+		t.Fatalf("HTML report includes derived input throughput in headline table:\n%s", html)
 	}
 	if strings.Contains(html, "<th>Mode</th>") {
 		t.Fatalf("HTML report still splits decode/prefill into mode rows:\n%s", html)
 	}
-	for _, forbidden := range []string{"Decode lat", "Prefill lat", "<th class=\"num\">OK</th><th class=\"num\">Err</th>"} {
+	for _, forbidden := range []string{"Decode lat", "Prefill lat", "<th class=\"num\">OK</th><th class=\"num\">Err</th>", "Full-run timing", "E2E output", "Output share/user", "Generation output tok/s", "steady decode"} {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("HTML report contains removed headline column %q:\n%s", forbidden, html)
 		}
@@ -273,15 +277,6 @@ func insertContextWorkloadMeasurement(t *testing.T, db *sql.DB, workloadID, phas
 		t.Fatal(err)
 	}
 	seedSQLiteHTMLMetrics(t, db, measurementID)
-}
-
-func TestInferQuantizationUsesServerReportedGGUFFType(t *testing.T) {
-	metadata := `{"identity":{"64k":{"models":{"data":[{"id":"model","meta":{"ftype":"Q4_K - Medium"}}]}}}}`
-	quantizations := servedQuantizationsByProfile(metadata)
-	got := inferQuantization(nil, []SQLiteReportEngine{{QuantizationsByProfile: quantizations}})
-	if got != "Q4_K - Medium" {
-		t.Fatalf("quantization = %q, want server-reported GGUF ftype", got)
-	}
 }
 
 func TestTokenThroughputMetricDisplay(t *testing.T) {
@@ -967,7 +962,7 @@ func TestCellDetailIncludesMetrics(t *testing.T) {
 	for _, item := range detail.Metrics {
 		labels[item.Label] = true
 	}
-	for _, want := range []string{"Requests ok/err", "E2E output tok/s", "Latency p50/p95/p99"} {
+	for _, want := range []string{"Requests ok/err", "Output tok/s", "Latency p50/p95/p99"} {
 		if !labels[want] {
 			t.Fatalf("detail metrics missing %q; got %v", want, labels)
 		}

@@ -162,46 +162,6 @@ func TestAllSkippedTableGetsNotRunWarning(t *testing.T) {
 	}
 }
 
-func TestBuildCarriesFullRunTiming(t *testing.T) {
-	doc := report.SQLiteReportDocument{
-		GeneratedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Measurements: []report.SQLiteReportMeasurement{{RepeatCount: 3}},
-		FullRunTimingRows: []report.SQLiteReportFullRunTimingRow{{
-			MeasurementID:                  42,
-			Profile:                        "64k",
-			Workload:                       "generate-full",
-			ContextLabel:                   "60k -> 61k active",
-			Concurrency:                    6,
-			RepeatCount:                    3,
-			OutputTokS:                     "20.430 ± 0.270",
-			EffectivePrefillTokS:           "1669.100 ± 25.900",
-			RequestEffectivePrefillTokS:    "672.100 ± 14.400",
-			RequestEffectivePrefillP50TokS: "484.500 ± 13.400",
-			TTFTMeanMS:                     "132006.000 ± 3703.000",
-			TTFTP99MS:                      "221886.000 ± 3546.000",
-			DecodePerUserTokS:              "7.280 ± 0.110",
-			DecodePerUserP50TokS:           "6.280 ± 0.130",
-			LatencyP95MS:                   "300000.000 ± 4000.000",
-			CompletedRequests:              18,
-		}},
-	}
-	model := Build("/tmp/report.sqlite", doc)
-	if model.Summary.PointCount != 1 || model.Summary.MeasurementCount != 3 {
-		t.Fatalf("summary point/measurement counts = %d/%d, want 1/3", model.Summary.PointCount, model.Summary.MeasurementCount)
-	}
-	rows := model.Throughput.FullRunTiming
-	if len(rows) != 1 {
-		t.Fatalf("full-run timing rows = %d, want 1", len(rows))
-	}
-	row := rows[0]
-	if row.MeasurementID != 42 || row.EffectivePrefillTokSDisplay != "1669 ± 25.9" || row.DecodePerUserTokSDisplay != "7.28 ± 0.11" || row.DecodePerUserP50Display != "6.28 ± 0.13" {
-		t.Fatalf("full-run timing row = %+v", row)
-	}
-	if row.TTFTMeanDisplay != "2m12s ± 3.7s" {
-		t.Fatalf("TTFT display = %q, want 2m12s ± 3.7s", row.TTFTMeanDisplay)
-	}
-}
-
 func TestPhaseMetricsCarryDisplayStrings(t *testing.T) {
 	row := throughputRow("run-1", "8k", "8k active context", 8192, 1)
 	row.ThroughputTokS = "878.846"
@@ -218,6 +178,51 @@ func TestPhaseMetricsCarryDisplayStrings(t *testing.T) {
 	}
 	if metrics.TTFTMeanDisplay != "1m42s" {
 		t.Fatalf("ttft display = %q, want unit-promoted 1m42s", metrics.TTFTMeanDisplay)
+	}
+}
+
+func TestGenerationEffectivePrefillUsesHistoricalViewerColumns(t *testing.T) {
+	row := throughputRow("run-1", "64k", "60k -> 61k active", 65536, 6)
+	row.Workload = "generate-full"
+	row.ThroughputTokS = "20.430 ± 0.270"
+	row.PerUserTokS = "3.405 ± 0.045"
+	row.EffectivePrefillTokS = "1669.100 ± 25.900"
+	row.EffectivePrefillPerUserTokS = "278.183 ± 4.317"
+	row.TTFTMeanMS = "132006.000 ± 3703.000"
+	row.TTFTP99MS = "221886.000 ± 3546.000"
+	row.CompletedRequests = 18
+	doc := report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{row},
+	}
+	got := Build("/tmp/report.sqlite", doc).Throughput.Tables[0].Rows[0]
+	if !got.Prefill.Derived || got.Prefill.TokSDisplay != "1669 ± 25.9" || got.Prefill.PerUserTokSDisplay != "278 ± 4.32" {
+		t.Fatalf("derived prefill = %+v", got.Prefill)
+	}
+	if got.Prefill.TTFTMeanDisplay != "2m12s ± 3.7s" || got.Prefill.TTFTP99Display != "3m42s ± 3.5s" {
+		t.Fatalf("prefill TTFT = %q/%q", got.Prefill.TTFTMeanDisplay, got.Prefill.TTFTP99Display)
+	}
+	if got.OK != 18 || got.Result != "18 / 0" {
+		t.Fatalf("derived prefill result = %+v", got)
+	}
+}
+
+func TestDedicatedPrefillTakesPrecedenceOverGenerationFallback(t *testing.T) {
+	decode := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+	decode.EffectivePrefillTokS = "1600"
+	decode.EffectivePrefillPerUserTokS = "266.667"
+	prefill := throughputRow("run-1", "64k", "64k active context", 65536, 6)
+	prefill.Mode = "prefill"
+	prefill.Workload = "prefill-full"
+	prefill.ThroughputTokS = "2200"
+	prefill.PerUserTokS = "366.667"
+	doc := report.SQLiteReportDocument{
+		GeneratedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		ThroughputRows: []report.SQLiteReportThroughputRow{decode, prefill},
+	}
+	got := Build("/tmp/report.sqlite", doc).Throughput.Tables[0].Rows[0]
+	if got.Prefill.Derived || got.Prefill.TokS != "2200" || got.Prefill.Workload != "prefill-full" {
+		t.Fatalf("prefill precedence = %+v", got.Prefill)
 	}
 }
 

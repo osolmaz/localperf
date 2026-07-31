@@ -59,6 +59,79 @@ func TestTokenWeightedITLAndDerivedRequestMetrics(t *testing.T) {
 	}
 }
 
+func TestGenerationPopulatesHistoricalDecodeAndPrefillColumns(t *testing.T) {
+	artifactPath := testSQLiteHTMLArtifact(t, "Generation Prefill")
+	db, err := sql.Open("sqlite", artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE workloads SET name = 'generate-full', phase = 'decode' WHERE id = 'workload-1'`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}' WHERE id = 1`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 2)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := LoadSQLiteReport(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := doc.ThroughputGroups[0].Rows[0]
+	if row.DecodeTokS != "123.400" || row.DecodePerUserTokS != "61.700" {
+		t.Fatalf("decode columns = %q/%q", row.DecodeTokS, row.DecodePerUserTokS)
+	}
+	if row.PrefillTokS != "1764.000" || row.PrefillPerUserTokS != "441.000" {
+		t.Fatalf("prefill columns = %q/%q, want aggregate and aggregate/users", row.PrefillTokS, row.PrefillPerUserTokS)
+	}
+	if row.DecodeTTFTMeanMS != row.PrefillTTFTMeanMS || row.DecodeTTFTMS != row.PrefillTTFTMS {
+		t.Fatalf("decode/prefill TTFT differ: %+v", row)
+	}
+	if row.OK != 2 || row.Err != 0 || row.Result != "2 / 0" {
+		t.Fatalf("derived prefill double-counted requests: %+v", row)
+	}
+
+	var out strings.Builder
+	if err := RenderHTMLReport(&out, doc, HTMLReportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	headline := `<th class="num">Users</th><th class="num">Decode tok/s</th><th class="num">Decode/user</th><th class="num">Decode TTFT avg</th><th class="num">Decode TTFT p99</th><th class="num">Prefill tok/s</th><th class="num">Prefill/user</th><th class="num">Prefill TTFT avg</th><th class="num">Prefill TTFT p99</th><th class="num">OK / Err</th>`
+	if !strings.Contains(out.String(), headline) {
+		t.Fatalf("HTML report does not retain exact historical headline order")
+	}
+	if strings.Contains(out.String(), "Full-run timing") {
+		t.Fatal("HTML report contains rejected full-run timing section")
+	}
+}
+
+func TestGenerationPrefillRequiresStreamedTTFTSource(t *testing.T) {
+	artifactPath := testSQLiteHTMLArtifact(t, "Unproven Prefill")
+	db, err := sql.Open("sqlite", artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE workloads SET phase = 'decode' WHERE id = 'workload-1'`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 2)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := LoadSQLiteReport(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := doc.ThroughputGroups[0].Rows[0].PrefillTokS; got != "-" {
+		t.Fatalf("unproven effective prefill = %q, want unavailable", got)
+	}
+}
+
 func TestDiagnosticWorkloadsAreExcludedFromBenchmarkViews(t *testing.T) {
 	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
 	createTestSQLiteHTMLArtifact(t, artifactPath, "Diagnostic")
@@ -159,82 +232,10 @@ func TestRepeatAggregationRendersSpreadAndRepeatRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := out.String()
-	for _, want := range []string{"Repeats", "Per-repeat rows", "±", ">2</td>"} {
+	for _, want := range []string{"Repeats", "Per-repeat rows", "±", "&times;2"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("HTML report missing %q", want)
 		}
-	}
-}
-
-func TestFullRunTimingReportsEffectivePrefillAndDecode(t *testing.T) {
-	artifactPath := filepath.Join(t.TempDir(), "run.sqlite")
-	createTestSQLiteHTMLArtifact(t, artifactPath, "Full Run Timing")
-	db, err := sql.Open("sqlite", artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`UPDATE workloads SET name = 'generate-full', phase = 'decode' WHERE id = 'workload-1'`); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`UPDATE measurements SET metadata_json = '{"ttft_source":"stream"}' WHERE id = 1`); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 1)
-	insertAggregateMetric(t, db, 1, "request_effective_prefill_throughput", "tok/s", 1500, 2)
-	insertAggregateMetric(t, db, 1, "request_decode_throughput", "tok/s", 40, 2)
-	if _, err := db.Exec(`UPDATE metric_stats SET p50 = CASE metric
-		WHEN 'request_effective_prefill_throughput' THEN 1400
-		WHEN 'request_decode_throughput' THEN 35 END
-		WHERE measurement_id = 1 AND metric IN ('request_effective_prefill_throughput', 'request_decode_throughput')`); err != nil {
-		_ = db.Close()
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	doc, err := LoadSQLiteReport(artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.FullRunTimingRows) != 1 {
-		t.Fatalf("full-run timing rows = %d, want 1", len(doc.FullRunTimingRows))
-	}
-	row := doc.FullRunTimingRows[0]
-	if row.EffectivePrefillTokS != "1764.000" || row.RequestEffectivePrefillTokS != "1500.000" || row.RequestEffectivePrefillP50TokS != "1400.000" || row.DecodePerUserTokS != "40.000" || row.DecodePerUserP50TokS != "35.000" {
-		t.Fatalf("full-run timing metrics = %+v, want effective prefill 1764, request mean/p50 1500/1400, post-first-token mean/p50 40/35", row)
-	}
-	var out strings.Builder
-	if err := RenderHTMLReport(&out, doc, HTMLReportOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"Full-run timing", "Effective prefill tok/s", "Effective prefill/user mean / p50", "Post-first-token/user mean / p50", ">1764<", "1500 / 1400", "40.0 / 35.0"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("HTML report missing %q", want)
-		}
-	}
-}
-
-func TestEffectivePrefillHiddenWithoutStreamedSource(t *testing.T) {
-	artifactPath := testSQLiteHTMLArtifact(t, "EffectivePrefillGate")
-	db, err := sql.Open("sqlite", artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	insertAggregateMetric(t, db, 1, "effective_prefill_throughput", "tok/s", 1764, 1)
-	insertAggregateMetric(t, db, 1, "request_effective_prefill_throughput", "tok/s", 1500, 2)
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	doc, err := LoadSQLiteReport(artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	measurement := doc.Measurements[0]
-	if measurement.EffectivePrefillTokS != "-" || measurement.RequestEffectivePrefillTokS != "-" {
-		t.Fatalf("effective prefill = %q/%q, want hidden without streamed source", measurement.EffectivePrefillTokS, measurement.RequestEffectivePrefillTokS)
 	}
 }
 

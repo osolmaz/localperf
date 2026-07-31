@@ -309,15 +309,17 @@ Do not describe aggregate cN throughput as single-user generation speed.
 TPOT and ITL use different weighting and are not interchangeable. A first byte
 without a token event is not TTFT.
 
-For a streamed full generation run, report effective prefill from the saved
-request evidence. Per-request effective prefill is prompt tokens divided by
-TTFT. Aggregate effective prefill is all prompt tokens in the concurrent batch
-divided by the time from the earliest request start to the latest first token.
-This includes queueing, scheduling, API overhead, and overlapping decode work.
-Keep it separate from isolated prefill-only throughput.
-
-Report per-request decode speed as 1,000 divided by TPOT in milliseconds. Keep
-that value separate from end-to-end output throughput, which includes TTFT.
+For a streamed generation run, fill the established Decode and Prefill
+headline columns from the same saved request evidence. Decode tok/s is total
+generated tokens divided by measurement wall time; Decode/user divides that
+aggregate by configured concurrency. When there is no dedicated prefill
+workload, Prefill tok/s is all prompt tokens divided by the time from the
+earliest request start to the latest streamed first token, and Prefill/user
+divides that aggregate by configured concurrency. A dedicated prefill workload
+takes precedence. The effective-prefill value includes queueing, scheduling,
+API overhead, and overlapping decode work; tiny prompts are sensitive to fixed
+request overhead. TPOT-derived per-request decode can remain in detailed
+metrics, but it does not replace either headline Decode value.
 
 ### Goodput
 
