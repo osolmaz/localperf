@@ -20,7 +20,7 @@
 <div class="throughput-group">
 <div class="group-head"><h2>{{.Title}}</h2>{{if .AxisItems}}<div class="group-meta">{{range .AxisItems}}<span class="axis-item"><span>{{.Label}}</span><strong>{{.Value}}</strong></span>{{end}}</div>{{end}}</div>
 <div class="table-wrap desktop-table"><table class="essential-table">
-<colgroup><col style="width:6%"><col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:16%"></colgroup>
+{{if $.Doc.HasSLO}}<colgroup><col style="width:5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:8.5%"><col style="width:12%"><col class="slo-col" style="width:15%"></colgroup>{{else}}<colgroup><col style="width:6%"><col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:9%"><col style="width:10%"><col style="width:10%"><col style="width:16%"></colgroup>{{end}}
 <thead><tr><th class="num">Users</th><th class="num">Decode tok/s</th><th class="num">Decode/user</th><th class="num">Decode TTFT avg</th><th class="num">Decode TTFT p99</th><th class="num">Prefill tok/s</th><th class="num">Prefill/user</th><th class="num">Prefill TTFT avg</th><th class="num">Prefill TTFT p99</th><th class="num">OK / Err</th>{{if $.Doc.HasSLO}}<th class="num">SLO / goodput</th>{{end}}</tr></thead>
 <tbody>
 {{range .Rows}}
@@ -29,7 +29,7 @@
 </tbody>
 </table></div>
 <div class="table-wrap phone-table-wrap"><table class="phone-table">
-<colgroup><col style="width:9%"><col style="width:11%"><col style="width:10%"><col style="width:17%"><col style="width:12%"><col style="width:10%"><col style="width:17%"><col style="width:14%"></colgroup>
+{{if $.Doc.HasSLO}}<colgroup><col style="width:7%"><col style="width:9%"><col style="width:8%"><col style="width:14%"><col style="width:10%"><col style="width:8%"><col style="width:14%"><col style="width:12%"><col class="slo-col" style="width:18%"></colgroup>{{else}}<colgroup><col style="width:9%"><col style="width:11%"><col style="width:10%"><col style="width:17%"><col style="width:12%"><col style="width:10%"><col style="width:17%"><col style="width:14%"></colgroup>{{end}}
 <thead><tr><th class="num">Users</th><th class="num">Decode</th><th class="num">D/user</th><th class="num">D avg/p99</th><th class="num">Prefill</th><th class="num">P/user</th><th class="num">P avg/p99</th><th class="num">OK/Err</th>{{if $.Doc.HasSLO}}<th class="num">SLO</th>{{end}}</tr></thead>
 <tbody>
 {{range .Rows}}

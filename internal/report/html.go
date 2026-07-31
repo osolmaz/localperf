@@ -2204,10 +2204,15 @@ func applyDerivedPrefill(target *SQLiteReportThroughputComparisonRow, source SQL
 func derivedPrefillDetail(detail SQLiteReportCellDetail) SQLiteReportCellDetail {
 	detail.Phase = "Prefill (generation-derived)"
 	detail.Mode = "prefill"
-	detail.Source = "generation-derived from streamed TTFT"
+	const derivedSource = "generation-derived from streamed TTFT"
+	if detail.Source == "" {
+		detail.Source = derivedSource
+	} else {
+		detail.Source += "; " + derivedSource
+	}
 	detail.Metrics = append([]SQLiteReportMetadataItem(nil), detail.Metrics...)
 	detail.Metrics = append(detail.Metrics,
-		SQLiteReportMetadataItem{Label: "Prefill source", Value: detail.Source},
+		SQLiteReportMetadataItem{Label: "Prefill source", Value: derivedSource},
 		SQLiteReportMetadataItem{Label: "Prefill formula", Value: "sum(prompt tokens) / (latest first token - earliest request start)"},
 	)
 	return detail
@@ -2906,7 +2911,7 @@ func compactMilliseconds(value string) string {
 }
 
 func parseDisplayedFloat(value string) (float64, bool) {
-	value = strings.TrimSpace(value)
+	value = strings.TrimSpace(strings.SplitN(value, "±", 2)[0])
 	if value == "" || value == "-" {
 		return 0, false
 	}

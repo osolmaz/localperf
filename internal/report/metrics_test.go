@@ -419,6 +419,9 @@ func TestSLOGoodputDerivation(t *testing.T) {
 	if !strings.Contains(out.String(), "SLO / goodput") || !strings.Contains(out.String(), "50% / 1.000") {
 		t.Fatal("HTML report missing visible SLO/goodput in the throughput table")
 	}
+	if got := strings.Count(out.String(), `class="slo-col"`); got != 2 {
+		t.Fatalf("SLO colgroup entries = %d, want desktop and phone widths", got)
+	}
 }
 
 // TestMultiRunReportAggregatesAcrossRuns checks model-level rendering: all
