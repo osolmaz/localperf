@@ -101,6 +101,8 @@ against a concrete request, stops the run. The profiler is inactive during
 timed measurements.
 External endpoints must use `auto` rather than making a concrete backend claim
 that LocalPerf cannot attest from managed server evidence.
+`localperf_http` deployments skip the suite's generic vLLM-CLI warmup; managed
+backend-observation canaries still run when a backend is declared.
 
 ## Suite format
 

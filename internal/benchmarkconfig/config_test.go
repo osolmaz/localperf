@@ -89,6 +89,27 @@ func TestSelectionUsesCaseAndConcurrencyTerms(t *testing.T) {
 	}
 }
 
+func TestExternalHTTPDeploymentDoesNotRequireVLLMCLIWarmup(t *testing.T) {
+	suite, _ := LoadSuite("practical-64k")
+	deployment := testDeployment()
+	deployment.Runtime.Managed = false
+	deployment.Runtime.Command = ""
+	deployment.Runtime.BenchCommand = ""
+	deployment.Runtime.Port = 0
+	deployment.Runtime.EndpointBaseURL = "https://api.example.com/v1"
+	deployment.Client.LoadGenerator = vllmbench.LoadGeneratorHTTP
+	compiled, err := Compile(suite, deployment, Selection{Cases: []string{"generate-empty"}, Concurrencies: []int{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Spec.Warmup.Enabled {
+		t.Fatal("external HTTP deployment retained the vLLM CLI warmup")
+	}
+	if err := vllmbench.ValidateSpec(compiled.Spec); err != nil {
+		t.Fatalf("compiled external HTTP deployment: %v", err)
+	}
+}
+
 func TestSuiteDerivesServerLimitsAndRejectsOverrides(t *testing.T) {
 	suite, _ := LoadSuite("practical-64k")
 	deployment := testDeployment()

@@ -47,6 +47,8 @@ When a managed deployment declares an attention or MoE backend, including
 concurrency point, then reads the emitted CUDA execution table before accepting
 that point. Missing evidence, or a mismatch against a concrete request, stops
 the run. The profiler is inactive during timed measurements.
+Deployments using `localperf_http` skip the generic vLLM-CLI warmup. Managed
+backend-observation canaries still run when a backend is declared.
 
 ```sh
 localperf bench run \
