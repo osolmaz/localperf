@@ -48,7 +48,7 @@
 <section class="section secondary">
 <h2>{{.Title}} Detail</h2>
 <div class="table-wrap"><table>
-<thead><tr><th>Profile</th><th>Workload</th><th>Context</th><th class="num">Conc.</th><th>Status</th><th class="num">Done</th><th class="num">Failed</th><th class="num">RPS</th><th class="num">Total tok/s</th><th class="num">Output tok/s</th><th class="num">Out/user</th><th class="num">TTFT mean</th><th class="num">TTFT p50</th><th class="num">TTFT p95</th><th class="num">TTFT p99</th><th class="num">Latency p50</th><th class="num">Latency p95</th><th class="num">Latency p99</th><th class="num">TPOT mean</th><th class="num">ITL tok-wt</th><th class="num">GPU util a/p</th><th class="num">GPU mem peak</th>{{if $.Doc.HasSLO}}<th class="num">% in SLO</th><th class="num">Goodput req/s</th>{{end}}</tr></thead>
+<thead><tr><th>Deployment</th><th>Case</th><th>Context</th><th class="num">Conc.</th><th>Status</th><th class="num">Done</th><th class="num">Failed</th><th class="num">RPS</th><th class="num">Total tok/s</th><th class="num">Output tok/s</th><th class="num">Out/user</th><th class="num">TTFT mean</th><th class="num">TTFT p50</th><th class="num">TTFT p95</th><th class="num">TTFT p99</th><th class="num">Latency p50</th><th class="num">Latency p95</th><th class="num">Latency p99</th><th class="num">TPOT mean</th><th class="num">ITL tok-wt</th><th class="num">GPU util a/p</th><th class="num">GPU mem peak</th>{{if $.Doc.HasSLO}}<th class="num">% in SLO</th><th class="num">Goodput req/s</th>{{end}}</tr></thead>
 <tbody>
 {{range .Measurements}}
 <tr><td>{{.Profile}}</td><td>{{.Workload}}</td><td>{{.ContextLabel}}{{if .ContextMismatch}} <span class="pill status-bad" title="{{.ContextMismatchNote}}">mismatch</span>{{end}}</td><td class="num">{{.Concurrency}}{{if gt .RepeatCount 1}} &times;{{.RepeatCount}}{{end}}{{if .AchievedConcurrency}} <span class="pill status-warn" title="time-weighted mean in-flight requests">{{.AchievedConcurrency}}</span>{{end}}</td><td><span class="pill {{statusClass .Status}}">{{.Status}}</span></td><td class="num">{{.CompletedRequests}}</td><td class="num">{{.FailedRequests}}{{if .FailureBreakdown}} <span title="{{.FailureBreakdown}}">({{.FailureBreakdown}})</span>{{end}}</td><td class="num">{{tokps .RPS}}</td><td class="num">{{tokps .TotalTokS}}</td><td class="num">{{tokps .OutputTokS}}</td><td class="num">{{tokps .PerUserOutputTokS}}</td><td class="num">{{seconds .TTFTMeanMS}}</td><td class="num">{{seconds .TTFTP50MS}}</td><td class="num">{{seconds .TTFTP95MS}}</td><td class="num">{{seconds .TTFTP99MS}}</td><td class="num">{{seconds .LatencyP50MS}}</td><td class="num">{{seconds .LatencyP95MS}}</td><td class="num">{{seconds .LatencyP99MS}}</td><td class="num">{{seconds .TPOTMeanMS}}</td><td class="num">{{seconds .ITLTokenWeightedMS}}</td><td class="num">{{.GPUUtil}}</td><td class="num">{{.GPUMemPeak}}</td>{{if $.Doc.HasSLO}}<td class="num">{{if .SLOMetPct}}<span title="{{.SLONote}}">{{.SLOMetPct}}</span>{{else}}-{{end}}</td><td class="num">{{if .GoodputRPS}}{{.GoodputRPS}}{{else}}-{{end}}</td>{{end}}</tr>
@@ -62,7 +62,7 @@
 <h2>Repeats</h2>
 <details><summary>Per-repeat rows behind aggregated points</summary>
 <div class="table-wrap"><table>
-<thead><tr><th>Run</th><th>Profile</th><th>Workload</th><th class="num">Conc.</th><th class="num">Repeat</th><th>Status</th><th class="num">Done</th><th class="num">Failed</th><th class="num">Output tok/s</th><th class="num">Out/user</th><th class="num">Effective prefill tok/s</th><th class="num">TTFT mean</th><th class="num">Latency p95</th></tr></thead>
+<thead><tr><th>Run</th><th>Deployment</th><th>Case</th><th class="num">Conc.</th><th class="num">Repeat</th><th>Status</th><th class="num">Done</th><th class="num">Failed</th><th class="num">Output tok/s</th><th class="num">Out/user</th><th class="num">Effective prefill tok/s</th><th class="num">TTFT mean</th><th class="num">Latency p95</th></tr></thead>
 <tbody>
 {{range .Doc.RepeatDetails}}
 <tr><td>{{.RunID}}</td><td>{{.Profile}}</td><td>{{.Workload}}</td><td class="num">{{.Concurrency}}</td><td class="num">{{.RepeatIndex}}</td><td><span class="pill {{statusClass .Status}}">{{.Status}}</span></td><td class="num">{{.CompletedRequests}}</td><td class="num">{{.FailedRequests}}</td><td class="num">{{.OutputTokS}}</td><td class="num">{{.PerUserOutputTokS}}</td><td class="num">{{.EffectivePrefillTokS}}</td><td class="num">{{.TTFTMeanMS}}</td><td class="num">{{.LatencyP95MS}}</td></tr>
@@ -94,7 +94,7 @@
 </table></div>
 </section>
 <section class="section secondary">
-<h2>Profiles</h2>
+<h2>Deployments</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Name</th><th>Model</th><th class="num">Server limit</th><th class="num">Max seqs</th><th class="num">Batched tokens</th><th class="num">GPU memory util.</th><th>KV cache</th><th>Prefix cache</th><th>Managed</th><th>Sleep</th></tr></thead>
 <tbody>{{range .Doc.Profiles}}<tr><td>{{.Name}}</td><td>{{.Model}}</td><td class="num">{{.ContextWindow}}</td><td class="num">{{.MaxNumSeqs}}</td><td class="num">{{.MaxNumBatchedTokens}}</td><td class="num">{{.GPUMemoryUtilizationS}}</td><td>{{.KVCacheDtype}}</td><td>{{.PrefixCaching}}</td><td>{{.Managed}}</td><td>{{.EnableSleepMode}}</td></tr>{{end}}</tbody>
@@ -103,7 +103,7 @@
 <section class="section secondary">
 <h2>Events</h2>
 <div class="grid summary">{{range .Doc.EventCounts}}<div class="stat"><span>{{.Name}}</span><strong>{{.Count}}</strong></div>{{end}}</div>
-{{if .Doc.NotableEvents}}<h3>Notable Events</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Level</th><th>Type</th><th>Profile</th><th>Workload</th><th>Message</th></tr></thead><tbody>{{range .Doc.NotableEvents}}<tr><td>{{.Timestamp}}</td><td>{{.Level}}</td><td>{{.Type}}</td><td>{{.Profile}}</td><td>{{.Workload}}</td><td class="wrap">{{.Message}}</td></tr>{{end}}</tbody></table></div>{{end}}
+{{if .Doc.NotableEvents}}<h3>Notable Events</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Level</th><th>Type</th><th>Deployment</th><th>Case</th><th>Message</th></tr></thead><tbody>{{range .Doc.NotableEvents}}<tr><td>{{.Timestamp}}</td><td>{{.Level}}</td><td>{{.Type}}</td><td>{{.Profile}}</td><td>{{.Workload}}</td><td class="wrap">{{.Message}}</td></tr>{{end}}</tbody></table></div>{{end}}
 </section>
 <section class="section secondary">
 <h2>Commands</h2>
@@ -127,8 +127,8 @@
 {{if .FailureReason}}<div class="detail-reason"><span>Reason</span><code>{{.FailureReason}}</code></div>{{end}}
 <div class="detail-grid">
 <span>Model</span><strong>{{.Model}}</strong>
-<span>Profile</span><strong>{{.Profile}}</strong>
-<span>Workload</span><strong>{{.Workload}}</strong>
+<span>Deployment</span><strong>{{.Profile}}</strong>
+<span>Case</span><strong>{{.Workload}}</strong>
 <span>Context</span><strong>{{.ContextLabel}}</strong>
 <span>Users</span><strong>{{.Concurrency}}</strong>
 <span>Samples</span><strong>{{.SamplesRequested}}</strong>

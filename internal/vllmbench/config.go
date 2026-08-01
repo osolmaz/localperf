@@ -1,13 +1,10 @@
 package vllmbench
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -199,12 +196,20 @@ type Workload struct {
 	Profiles                []string    `json:"profiles,omitempty"`
 	NumPrompts              int         `json:"num_prompts"`
 	PromptsPerUser          int         `json:"prompts_per_user,omitempty"`
+	Batches                 []Batch     `json:"batches,omitempty"`
 	Repeats                 int         `json:"repeats,omitempty"`
 	MaxConcurrency          []int       `json:"max_concurrency"`
 	Stream                  *bool       `json:"stream,omitempty"`
 	IgnoreEOS               bool        `json:"ignore_eos,omitempty"`
 	Temperature             *float64    `json:"temperature,omitempty"`
 	CapturePayloadArtifacts bool        `json:"capture_payload_artifacts,omitempty"`
+}
+
+// Batch records the exact number of requests in one concurrency point.
+// Suite compilation uses this instead of an implicit prompts-per-user rule.
+type Batch struct {
+	Concurrency int `json:"concurrency"`
+	Requests    int `json:"requests"`
 }
 
 // SLOConfig declares latency targets for goodput derivation: the fraction of
@@ -256,34 +261,6 @@ type PlannedRun struct {
 	Concurrency int      `json:"concurrency"`
 	Repeat      int      `json:"repeat,omitempty"`
 	ResultFile  string   `json:"result_file"`
-}
-
-func LoadSpec(path string) (Spec, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Spec{}, err
-	}
-	var spec Spec
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&spec); err != nil {
-		return Spec{}, err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			return Spec{}, errors.New("spec must contain exactly one JSON document")
-		}
-		return Spec{}, err
-	}
-	// Verify provenance against the raw file bytes, before unmarshalling
-	// drops unknown fields and defaults mutate the spec: the runner's label
-	// must match what reports later verify from the stored bytes.
-	spec.Provenance, _ = artifact.VerifySpecProvenance(data)
-	ApplyDefaults(&spec)
-	if err := ValidateSpec(spec); err != nil {
-		return Spec{}, err
-	}
-	return spec, nil
 }
 
 func ApplyDefaults(spec *Spec) {
@@ -385,6 +362,12 @@ func applyWorkloadDefault(workload *Workload) {
 
 // applyWorkloadConcurrencyDefaults sorts the declared concurrency ladder.
 func applyWorkloadConcurrencyDefaults(workload *Workload) {
+	if len(workload.Batches) > 0 {
+		workload.MaxConcurrency = workload.MaxConcurrency[:0]
+		for _, batch := range workload.Batches {
+			workload.MaxConcurrency = append(workload.MaxConcurrency, batch.Concurrency)
+		}
+	}
 	// Ladders run ascending: the documented sparse search depends on it and
 	// the adaptive stop rules compare against the previous (lower) point.
 	sort.Ints(workload.MaxConcurrency)
@@ -433,6 +416,9 @@ func applyDatasetDefaults(workload *Workload) {
 // defaultDatasetSampleCount prepares enough rows for the workload: the fixed
 // request count, or the largest ladder point when prompts scale.
 func defaultDatasetSampleCount(workload Workload) int {
+	if len(workload.Batches) > 0 {
+		return resolvedNumPrompts(workload, largestConcurrency(workload))
+	}
 	if workload.NumPrompts > 0 {
 		return workload.NumPrompts
 	}
@@ -1063,11 +1049,21 @@ func validateWorkloadDatasetName(prefix string, workload Workload) []string {
 
 func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	var issues []string
-	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 {
-		issues = append(issues, prefix+": num_prompts or prompts_per_user must be positive")
+	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && len(workload.Batches) == 0 {
+		issues = append(issues, prefix+": num_prompts, prompts_per_user, or batches must be set")
 	}
-	if workload.NumPrompts > 0 && workload.PromptsPerUser > 0 {
-		issues = append(issues, prefix+": set either num_prompts (fixed) or prompts_per_user (scales with concurrency), not both")
+	countModes := 0
+	if workload.NumPrompts > 0 {
+		countModes++
+	}
+	if workload.PromptsPerUser > 0 {
+		countModes++
+	}
+	if len(workload.Batches) > 0 {
+		countModes++
+	}
+	if countModes > 1 {
+		issues = append(issues, prefix+": set exactly one of num_prompts, prompts_per_user, or batches")
 	}
 	if workload.PromptsPerUser < 0 {
 		issues = append(issues, prefix+": prompts_per_user must not be negative")
@@ -1077,6 +1073,16 @@ func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	}
 	if len(workload.MaxConcurrency) == 0 {
 		issues = append(issues, prefix+": max_concurrency must not be empty")
+	}
+	seen := map[int]bool{}
+	for index, batch := range workload.Batches {
+		if batch.Concurrency <= 0 || batch.Requests <= 0 {
+			issues = append(issues, fmt.Sprintf("%s: batches[%d] concurrency and requests must be positive", prefix, index))
+		}
+		if seen[batch.Concurrency] {
+			issues = append(issues, fmt.Sprintf("%s: duplicate batch concurrency %d", prefix, batch.Concurrency))
+		}
+		seen[batch.Concurrency] = true
 	}
 	return issues
 }
@@ -1334,6 +1340,11 @@ func buildPlannedRun(runDir string, profile Profile, workload Workload, concurre
 // resolvedNumPrompts scales the request count with concurrency when the
 // workload declares prompts_per_user.
 func resolvedNumPrompts(workload Workload, concurrency int) int {
+	for _, batch := range workload.Batches {
+		if batch.Concurrency == concurrency {
+			return batch.Requests
+		}
+	}
 	if workload.PromptsPerUser <= 0 {
 		return workload.NumPrompts
 	}

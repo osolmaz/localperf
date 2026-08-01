@@ -1,12 +1,10 @@
 package vllmbench
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -26,7 +24,7 @@ const (
 // accumulate in a single model-level file; see
 // docs/2026-07-02-default-inference-sweep.md. Re-running the same run
 // directory replaces that run's rows instead of duplicating them.
-func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string) error {
+func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary) error {
 	if strings.TrimSpace(artifactPath) == "" {
 		return nil
 	}
@@ -34,10 +32,10 @@ func writeSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSumm
 	if err := ValidateSpec(spec); err != nil {
 		return fmt.Errorf("refuse artifact write for invalid spec: %w", err)
 	}
-	return persistSQLiteArtifact(runDir, artifactPath, spec, summary, originalSpecPath)
+	return persistSQLiteArtifact(runDir, artifactPath, spec, summary)
 }
 
-func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary, originalSpecPath string) error {
+func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSummary) error {
 	createdFresh := artifactPathIsFresh(artifactPath)
 	db, err := createSQLiteArtifact(artifactPath)
 	if err != nil {
@@ -46,7 +44,7 @@ func persistSQLiteArtifact(runDir, artifactPath string, spec Spec, summary RunSu
 	defer db.Close()
 	plan := BuildPlan(spec, runDir)
 	if err := withSQLiteTx(db, func(tx *sql.Tx) error {
-		return writeSQLiteRun(tx, runDir, spec, summary, plan, originalSpecPath)
+		return writeSQLiteRun(tx, runDir, spec, summary, plan)
 	}); err != nil {
 		return cleanupFailedArtifact(db, artifactPath, createdFresh, err)
 	}
@@ -79,7 +77,7 @@ func withSQLiteTx(db *sql.DB, run func(*sql.Tx) error) error {
 	return artifact.WithTx(db, run)
 }
 
-func writeSQLiteRun(tx *sql.Tx, runDir string, spec Spec, summary RunSummary, plan []PlannedRun, originalSpecPath string) error {
+func writeSQLiteRun(tx *sql.Tx, runDir string, spec Spec, summary RunSummary, plan []PlannedRun) error {
 	now := time.Now().UTC()
 	runID := sqliteRunID(runDir, spec)
 	events, err := readEvents(filepath.Join(runDir, "events.jsonl"))
@@ -96,7 +94,7 @@ func writeSQLiteRun(tx *sql.Tx, runDir string, spec Spec, summary RunSummary, pl
 	if err := insertRunRow(tx, runID, runDir, spec, summary); err != nil {
 		return err
 	}
-	if err := insertRunSpecs(tx, runID, runDir, spec, originalSpecPath, now); err != nil {
+	if err := insertRunSpecs(tx, runID, runDir, spec, now); err != nil {
 		return err
 	}
 	return insertRunData(tx, runID, runDir, spec, summary, plan, events, now)
@@ -233,16 +231,12 @@ func currentUsername() string {
 	return currentUser.Username
 }
 
-func insertRunSpecs(tx *sql.Tx, runID, runDir string, spec Spec, originalSpecPath string, now time.Time) error {
+func insertRunSpecs(tx *sql.Tx, runID, runDir string, spec Spec, now time.Time) error {
 	specData, err := json.MarshalIndent(RedactedSpec(spec), "", "  ")
 	if err != nil {
 		return err
 	}
-	originalData, err := originalSpecBytes(originalSpecPath, specData)
-	if err != nil {
-		return err
-	}
-	if err := insertSpec(tx, runID, "original", originalData, now); err != nil {
+	if err := insertSpec(tx, runID, "original", specData, now); err != nil {
 		return err
 	}
 	normalizedData, err := os.ReadFile(filepath.Join(runDir, "spec.normalized.json"))
@@ -303,92 +297,6 @@ func insertSpec(tx *sql.Tx, runID, kind string, data []byte, createdAt time.Time
 		VALUES (?, ?, 'json', ?, ?, ?)`,
 		runID, kind, content, sha256Hex([]byte(content)), createdAt.Format(time.RFC3339))
 	return err
-}
-
-func originalSpecBytes(path string, fallback []byte) ([]byte, error) {
-	if strings.TrimSpace(path) == "" {
-		return fallback, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	redacted, err := redactedJSONDocument(data)
-	if err != nil {
-		return nil, err
-	}
-	return redacted, nil
-}
-
-func redactedJSONDocument(data []byte) ([]byte, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("extra content after JSON document")
-	}
-	value = redactSensitiveJSONValue(value)
-	return json.MarshalIndent(value, "", "  ")
-}
-
-func redactSensitiveJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			if strings.EqualFold(key, "env") {
-				typed[key] = redactJSONEnv(child)
-				continue
-			}
-			if isSensitiveJSONKey(key) {
-				typed[key] = "<redacted>"
-				continue
-			}
-			typed[key] = redactSensitiveJSONValue(child)
-		}
-		return typed
-	case []any:
-		for i, child := range typed {
-			typed[i] = redactSensitiveJSONValue(child)
-		}
-		return typed
-	default:
-		return value
-	}
-}
-
-func redactJSONEnv(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			if isSensitiveEnvKey(key) {
-				typed[key] = "<redacted>"
-				continue
-			}
-			typed[key] = child
-		}
-		return typed
-	default:
-		return redactSensitiveJSONValue(value)
-	}
-}
-
-func isSensitiveJSONKey(key string) bool {
-	upper := strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
-	switch upper {
-	case "AUTH", "AUTHORIZATION", "COOKIE", "CREDENTIAL", "CREDENTIALS", "KEY", "PASS", "PASSWORD", "SECRET", "TOKEN",
-		"API_KEY", "ACCESS_TOKEN", "REFRESH_TOKEN", "CLIENT_SECRET":
-		return true
-	}
-	for _, suffix := range []string{"_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_CREDENTIAL", "_CREDENTIALS"} {
-		if strings.HasSuffix(upper, suffix) {
-			return true
-		}
-	}
-	return false
 }
 
 func insertEngines(tx *sql.Tx, runID string, spec Spec) error {
@@ -1313,8 +1221,30 @@ func applyEngineIdentityEvents(tx *sql.Tx, runID string, spec Spec, events []Eve
 		if err := applyEngineIdentityEvent(tx, runID, engineByProfile, event); err != nil {
 			return err
 		}
+		if err := applyBackendObservationEvent(tx, runID, engineByProfile, event); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func applyBackendObservationEvent(tx *sql.Tx, runID string, engineByProfile map[string]string, event Event) error {
+	if event.Type != "backend_observation" || len(event.Details) == 0 {
+		return nil
+	}
+	engineName := engineByProfile[event.Profile]
+	if engineName == "" {
+		return nil
+	}
+	var observation backendObservation
+	if err := json.Unmarshal(event.Details, &observation); err != nil {
+		return nil
+	}
+	_, err := tx.Exec(`UPDATE engines SET
+		metadata_json = json_patch(COALESCE(metadata_json, '{}'), json_object('backend_observation', json_object(?, json(?))))
+		WHERE run_id = ? AND id = ?`,
+		event.Profile, string(event.Details), runID, dimensionID(runID, engineName))
+	return err
 }
 
 func applyEngineIdentityEvent(tx *sql.Tx, runID string, engineByProfile map[string]string, event Event) error {

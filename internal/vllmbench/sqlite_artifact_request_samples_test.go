@@ -143,7 +143,7 @@ func TestSQLiteArtifactStoresVLLMBenchStreamTimingProvenance(t *testing.T) {
 		PlannedRuns:   1,
 		CompletedRuns: 1,
 	}
-	if err := writeSQLiteArtifact(runDir, artifactPath, spec, summary, ""); err != nil {
+	if err := writeSQLiteArtifact(runDir, artifactPath, spec, summary); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", artifactPath)

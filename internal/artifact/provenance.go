@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 )
 
-// GeneratorStamp is the provenance record `sweep plan` writes into generated
-// specs. ContentHash covers the canonical spec document with the "generator"
+// GeneratorStamp is the provenance record deterministic compilers write into
+// internal execution documents. ContentHash covers the canonical document with the "generator"
 // key removed, so any post-generation edit is detectable.
 type GeneratorStamp struct {
 	Tool        string          `json:"tool"`
@@ -26,8 +26,7 @@ type LadderTrim struct {
 	Reason         string `json:"reason"`
 }
 
-// Spec provenance statuses; reports label anything but a verified generated
-// spec as a custom grid.
+// Internal execution-document provenance statuses.
 const (
 	SpecProvenanceGenerated = "generated"
 	SpecProvenanceEdited    = "edited"

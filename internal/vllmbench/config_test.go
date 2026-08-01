@@ -67,15 +67,6 @@ func TestLoadGeneratorAliasesAreRejected(t *testing.T) {
 	}
 }
 
-func TestLoadSpecRejectsUnknownFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "spec.json")
-	writeFile(t, path, `{"version":"1","unknown":true}`)
-	_, err := LoadSpec(path)
-	if err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("LoadSpec = %v, want unknown field rejection", err)
-	}
-}
-
 func TestValidateSpecRequiresCurrentVersionRoleAndContextSemantics(t *testing.T) {
 	for name, mutate := range map[string]func(*Spec){
 		"version":           func(spec *Spec) { spec.Version = "" },
@@ -266,62 +257,6 @@ func TestBenchCommandSupportsStandardDatasetKnobs(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("command %q missing %q", got, want)
-		}
-	}
-}
-
-func TestLoadSpecSupportsCanonicalEngineNeutralShape(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "spec.json")
-	writeFile(t, path, `{
-  "version": "1",
-  "name": "engine-neutral",
-  "model": "example/model",
-  "safety": {"min_mem_available_gib": 1},
-  "engines": [
-    {"name": "vllm", "type": "vllm-managed", "command": "vllm-custom"}
-  ],
-  "profiles": [
-    {
-      "name": "4k",
-      "engine": "vllm",
-      "managed": true,
-      "port": 8104,
-      "max_model_len": 4096,
-      "max_num_seqs": 8,
-      "max_num_batched_tokens": 4096,
-      "gpu_memory_utilization": 0.25,
-      "engine_args": ["--disable-log-requests"]
-    }
-  ],
-  "workloads": [
-    {
-      "name": "decode",
-      "role": "benchmark",
-      "profiles": ["4k"],
-      "context_target": 4096,
-      "context_semantics": "capacity",
-      "backend": "openai-chat",
-      "dataset_name": "random",
-      "random_input_len": 128,
-      "random_output_len": 16,
-      "request_rate": "inf",
-      "num_prompts": 8,
-      "repeats": 2,
-      "max_concurrency": [1, 2]
-    }
-  ]
-}`)
-	spec, err := LoadSpec(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := len(BuildPlan(spec, "runs/example")); got != 4 {
-		t.Fatalf("plan length = %d, want 4", got)
-	}
-	got := ShellQuote(ServeCommand(spec, spec.Profiles[0]).Args)
-	for _, want := range []string{"vllm-custom serve", "--max-model-len 4096", "--disable-log-requests"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("serve command %q missing %q", got, want)
 		}
 	}
 }
@@ -715,93 +650,6 @@ func TestApplyDefaultsSetsOmittedSleepLevelToTwo(t *testing.T) {
 	}
 }
 
-func TestApplyFilter(t *testing.T) {
-	spec := testSpec()
-	err := ApplyFilter(&spec, Filter{
-		Profiles:      []string{"8k"},
-		Workloads:     []string{"prefill-8k"},
-		Concurrencies: []int{8},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := BuildPlan(spec, "runs/example")
-	if len(plan) != 1 {
-		t.Fatalf("plan length = %d, want 1", len(plan))
-	}
-	if plan[0].Profile.Name != "8k" || plan[0].Workload.Name != "prefill-8k" || plan[0].Concurrency != 8 {
-		t.Fatalf("unexpected filtered plan: %+v", plan[0])
-	}
-}
-
-func TestApplyFilterDropsWorkloadsWithoutMatchingProfile(t *testing.T) {
-	spec := testSpec()
-	spec.Profiles = append(spec.Profiles, Profile{
-		Name:        "16k",
-		Model:       spec.Model,
-		Host:        "127.0.0.1",
-		Port:        8116,
-		Managed:     true,
-		MaxModelLen: 16384,
-		MaxNumSeqs:  16,
-	})
-	spec.Workloads = append(spec.Workloads, Workload{
-		Name:     "prefill-16k",
-		Profiles: []string{"16k"},
-		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
-			Backend:         "openai-chat",
-			DatasetName:     "random",
-			RandomInputLen:  14336,
-			RandomOutputLen: 16,
-		},
-		NumPrompts:     8,
-		MaxConcurrency: []int{4},
-	})
-	ApplyDefaults(&spec)
-	if err := ApplyFilter(&spec, Filter{Profiles: []string{"8k"}}); err != nil {
-		t.Fatal(err)
-	}
-	plan := BuildPlan(spec, "runs/example")
-	if len(plan) != 2 {
-		t.Fatalf("plan length = %d, want only the two 8k workload concurrencies", len(plan))
-	}
-	for _, run := range plan {
-		if run.Profile.Name != "8k" || run.Workload.Name != "prefill-8k" {
-			t.Fatalf("unexpected filtered run: %+v", run)
-		}
-	}
-}
-
-func TestApplyFilterDropsWorkloadsWithoutMatchingConcurrency(t *testing.T) {
-	spec := testSpec()
-	spec.Workloads = append(spec.Workloads, Workload{
-		Name:             "claim-repro",
-		Role:             WorkloadRoleBenchmark,
-		Profiles:         []string{"8k"},
-		ContextTarget:    8192,
-		ContextSemantics: ContextSemanticsCapacity,
-		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
-			Backend:         "openai-chat",
-			DatasetName:     "random",
-			RandomInputLen:  1000,
-			RandomOutputLen: 1024,
-		},
-		NumPrompts:     40,
-		MaxConcurrency: []int{20},
-	})
-	ApplyDefaults(&spec)
-	if err := ApplyFilter(&spec, Filter{Concurrencies: []int{20}}); err != nil {
-		t.Fatal(err)
-	}
-	plan := BuildPlan(spec, "runs/example")
-	if len(plan) != 1 {
-		t.Fatalf("plan length = %d, want only the c20 workload", len(plan))
-	}
-	if plan[0].Workload.Name != "claim-repro" || plan[0].Concurrency != 20 {
-		t.Fatalf("unexpected filtered run: %+v", plan[0])
-	}
-}
-
 func TestParseMeminfo(t *testing.T) {
 	meminfo := strings.NewReader(`MemTotal:       131072000 kB
 MemFree:         1000000 kB
@@ -876,7 +724,7 @@ func TestExecuteDryRunAndReport(t *testing.T) {
 	}
 }
 
-func TestExecuteDryRunStoresOriginalSpecAndPlannedCommandStatus(t *testing.T) {
+func TestExecuteDryRunStoresInternalExecutionDocumentAndPlannedCommandStatus(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "spec.json")
 	writeFile(t, specPath, `{
@@ -912,14 +760,21 @@ func TestExecuteDryRunStoresOriginalSpecAndPlannedCommandStatus(t *testing.T) {
     }
   ]
 }`)
-	spec, err := LoadSpec(specPath)
+	data, err := os.ReadFile(specPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var spec Spec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		t.Fatal(err)
+	}
+	ApplyDefaults(&spec)
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatal(err)
+	}
 	summary, err := Execute(context.Background(), spec, RunOptions{
-		DryRun:           true,
-		RunDir:           filepath.Join(dir, "run"),
-		OriginalSpecPath: specPath,
+		DryRun: true,
+		RunDir: filepath.Join(dir, "run"),
 	})
 	if err != nil {
 		t.Fatal(err)

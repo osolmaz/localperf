@@ -29,8 +29,7 @@ type RunOptions struct {
 	// Resume skips planned runs whose result file already exists and
 	// parses as completed with no failed requests; requires an explicit
 	// RunDir pointing at the previous attempt.
-	Resume           bool
-	OriginalSpecPath string
+	Resume bool
 }
 
 type RunSummary struct {
@@ -245,7 +244,7 @@ func (session *runSession) finish(runErr error) (RunSummary, error) {
 	if runErr == nil {
 		runErr = session.ctx.Err()
 	}
-	err := finalizeRun(session.runDir, &session.summary, session.events, session.spec, session.opts.OriginalSpecPath, runErr)
+	err := finalizeRun(session.runDir, &session.summary, session.events, session.spec, runErr)
 	return session.summary, err
 }
 
@@ -418,7 +417,7 @@ func (session *runSession) writeArtifactSnapshot() {
 	}
 	snapshot := session.summary
 	snapshot.InProgress = true
-	if err := writeSQLiteArtifact(session.runDir, snapshot.ArtifactPath, session.spec, snapshot, session.opts.OriginalSpecPath); err != nil {
+	if err := writeSQLiteArtifact(session.runDir, snapshot.ArtifactPath, session.spec, snapshot); err != nil {
 		session.events.Write(Event{Timestamp: time.Now().UTC(), Type: "artifact_snapshot_failed", Error: err.Error()})
 	}
 }
@@ -509,7 +508,7 @@ func (session *runSession) stopFinishedProfile(profile Profile, proc *serverProc
 	}
 }
 
-func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec Spec, originalSpecPath string, runErr error) error {
+func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec Spec, runErr error) error {
 	summary.FinishedAt = time.Now().UTC()
 	if runErr != nil {
 		summary.Error = runErr.Error()
@@ -518,7 +517,7 @@ func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec S
 	if err := writeJSONFile(filepath.Join(runDir, "summary.json"), summary); err != nil {
 		return err
 	}
-	if err := writeFinalArtifact(runDir, summary, spec, originalSpecPath); err != nil && runErr == nil {
+	if err := writeFinalArtifact(runDir, summary, spec); err != nil && runErr == nil {
 		return err
 	}
 	return finalRunError(*summary, runErr)
@@ -535,11 +534,11 @@ func writeRunFinishEvent(summary *RunSummary, events *eventWriter, runErr error)
 	events.Write(event)
 }
 
-func writeFinalArtifact(runDir string, summary *RunSummary, spec Spec, originalSpecPath string) error {
+func writeFinalArtifact(runDir string, summary *RunSummary, spec Spec) error {
 	if summary.ArtifactPath == "" {
 		return nil
 	}
-	return writeSQLiteArtifact(runDir, summary.ArtifactPath, spec, *summary, originalSpecPath)
+	return writeSQLiteArtifact(runDir, summary.ArtifactPath, spec, *summary)
 }
 
 func finalRunError(summary RunSummary, runErr error) error {
@@ -782,6 +781,15 @@ func (waiter *readinessWaiter) probeReady() bool {
 			Details:   mustJSON(identity),
 		})
 	}
+	logPath := ""
+	if waiter.proc != nil {
+		logPath = waiter.proc.logPath
+	}
+	observation, _ := observeBackends(waiter.profile, logPath)
+	waiter.events.Write(Event{
+		Timestamp: time.Now().UTC(), Type: "backend_observation",
+		Profile: waiter.profile.Name, Details: mustJSON(observation),
+	})
 	return true
 }
 

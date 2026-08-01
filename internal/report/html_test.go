@@ -70,6 +70,35 @@ func TestRenderSQLiteHTMLReportEscapesAndIsStandalone(t *testing.T) {
 	}
 }
 
+func TestBackendObservationItemsSeparateRequestedAndObserved(t *testing.T) {
+	doc := SQLiteReportDocument{Engines: []SQLiteReportEngine{{
+		BackendsByProfile: map[string]SQLiteReportBackendObservation{
+			"deployment": {
+				Requested: map[string]string{"attention": "flashinfer"},
+				Observed:  map[string]string{"attention": "flash_attn"},
+			},
+		},
+	}}}
+	items := backendObservationItems(doc)
+	if len(items) != 1 || items[0].Label != "Backend deployment / attention" || items[0].Value != "requested flashinfer; observed flash_attn" {
+		t.Fatalf("backend metadata = %+v", items)
+	}
+}
+
+func TestEngineModelRevisionComesFromDeploymentMetadata(t *testing.T) {
+	got := engineDeploymentMetadata(`{"model_revision":"abc123","runtime_owner":"vllm-project","runtime_version_requested":"0.26.0","speculative_decoding":["--speculative-config=x"]}`)
+	if got.ModelRevision != "abc123" || got.RuntimeOwner != "vllm-project" || got.RuntimeVersion != "0.26.0" || len(got.SpeculativeDecoding) != 1 {
+		t.Fatalf("deployment metadata = %+v", got)
+	}
+}
+
+func TestSpecProvenanceDisplayUsesSuiteTerminology(t *testing.T) {
+	doc := SQLiteReportDocument{SpecProvenance: artifact.SpecProvenanceGenerated, SpecSuite: "practical-64k", SpecGenerator: &artifact.GeneratorStamp{Tool: "localperf-suite"}}
+	if got := specProvenanceDisplay(doc); got != "Suite practical-64k" {
+		t.Fatalf("execution display = %q", got)
+	}
+}
+
 func TestRenderSQLiteHTMLReportShowsFailedCellsAndProvenance(t *testing.T) {
 	artifactPath := testSQLiteHTMLArtifact(t, "Failed Cell")
 	db, err := sql.Open("sqlite", artifactPath)
@@ -1056,9 +1085,9 @@ func TestSpecProvenanceRendersInReport(t *testing.T) {
 	// The fixture's original spec has no generator stamp.
 	found := false
 	for _, item := range doc.MetadataItems {
-		if item.Label == "Spec" {
+		if item.Label == "Execution" {
 			found = true
-			if item.Value != "Custom grid (hand-authored)" {
+			if item.Value != "Legacy plan" {
 				t.Fatalf("spec provenance = %q, want custom grid for an unstamped spec", item.Value)
 			}
 		}
@@ -1138,7 +1167,7 @@ func TestGeneratedSpecTrimsRenderAsRows(t *testing.T) {
 		t.Fatalf("trimmed row = %+v, want c16 at 64k with the declared reason", row)
 	}
 	for _, item := range doc.MetadataItems {
-		if item.Label == "Spec" && !strings.Contains(item.Value, "Generated default sweep") {
+		if item.Label == "Execution" && !strings.Contains(item.Value, "Generated default sweep") {
 			t.Fatalf("spec provenance = %q, want generated", item.Value)
 		}
 	}

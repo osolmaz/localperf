@@ -52,6 +52,7 @@ type SQLiteReportDocument struct {
 	SpecProvenance     string
 	SpecGenerator      *artifact.GeneratorStamp
 	SpecConcurrency    []int
+	SpecSuite          string
 	ExistingReports    []SQLiteReportExport
 	ArtifactSummaries  []SQLiteReportArtifactSummary
 	MeasurementMetrics map[int64]map[string]SQLiteReportMetric
@@ -77,19 +78,32 @@ type SQLiteReportRun struct {
 }
 
 type SQLiteReportEngine struct {
-	ID              string
-	Name            string
-	Type            string
-	Managed         bool
-	Command         string
-	Version         string
-	GitCommit       string
-	EndpointBaseURL string
+	ID                  string
+	Name                string
+	Type                string
+	Managed             bool
+	Command             string
+	Version             string
+	GitCommit           string
+	EndpointBaseURL     string
+	ModelRevision       string
+	DeploymentName      string
+	RuntimeOwner        string
+	RuntimeSource       string
+	RuntimeVersion      string
+	RuntimeDigest       string
+	SpeculativeDecoding []string
 	// ServedModelsByProfile lists every model the server reported per
 	// probed profile, from the engine identity stored under
 	// metadata_json.identity. Multi-model servers report all of them.
 	ServedModelsByProfile  map[string][]string
 	QuantizationsByProfile map[string][]string
+	BackendsByProfile      map[string]SQLiteReportBackendObservation
+}
+
+type SQLiteReportBackendObservation struct {
+	Requested map[string]string `json:"requested"`
+	Observed  map[string]string `json:"observed"`
 }
 
 type SQLiteReportProfile struct {
@@ -727,9 +741,46 @@ func loadSQLiteReportEngines(db *sql.DB, doc *SQLiteReportDocument) error {
 		engine.Managed = managed != 0
 		engine.ServedModelsByProfile = servedModelsByProfile(metadataJSON)
 		engine.QuantizationsByProfile = servedQuantizationsByProfile(metadataJSON)
+		engine.BackendsByProfile = backendObservationsByProfile(metadataJSON)
+		provenance := engineDeploymentMetadata(metadataJSON)
+		engine.ModelRevision = provenance.ModelRevision
+		engine.DeploymentName = provenance.DeploymentName
+		engine.RuntimeOwner = provenance.RuntimeOwner
+		engine.RuntimeSource = provenance.RuntimeSource
+		engine.RuntimeVersion = provenance.RuntimeVersion
+		engine.RuntimeDigest = provenance.RuntimeDigest
+		engine.SpeculativeDecoding = provenance.SpeculativeDecoding
 		doc.Engines = append(doc.Engines, engine)
 	}
 	return rows.Err()
+}
+
+type engineDeploymentProvenance struct {
+	DeploymentName      string   `json:"deployment"`
+	ModelRevision       string   `json:"model_revision"`
+	RuntimeOwner        string   `json:"runtime_owner"`
+	RuntimeSource       string   `json:"runtime_source"`
+	RuntimeVersion      string   `json:"runtime_version_requested"`
+	RuntimeDigest       string   `json:"runtime_digest"`
+	SpeculativeDecoding []string `json:"speculative_decoding"`
+}
+
+func engineDeploymentMetadata(metadataJSON string) engineDeploymentProvenance {
+	var metadata engineDeploymentProvenance
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return engineDeploymentProvenance{}
+	}
+	return metadata
+}
+
+func backendObservationsByProfile(metadataJSON string) map[string]SQLiteReportBackendObservation {
+	var metadata struct {
+		BackendObservation map[string]SQLiteReportBackendObservation `json:"backend_observation"`
+	}
+	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+		return nil
+	}
+	return metadata.BackendObservation
 }
 
 func servedModelsByProfile(metadataJSON string) map[string][]string {
@@ -1408,10 +1459,12 @@ func loadSQLiteReportSpecProvenance(db *sql.DB, doc *SQLiteReportDocument) error
 	doc.SpecGenerator = stamp
 	if status == artifact.SpecProvenanceGenerated && stamp != nil && len(stamp.Intent) > 0 {
 		var intent struct {
-			Concurrency []int `json:"concurrency"`
+			Concurrency []int  `json:"concurrency"`
+			Suite       string `json:"suite"`
 		}
 		if err := json.Unmarshal(stamp.Intent, &intent); err == nil {
 			doc.SpecConcurrency = intent.Concurrency
+			doc.SpecSuite = intent.Suite
 		}
 	}
 	return nil
@@ -1420,11 +1473,14 @@ func loadSQLiteReportSpecProvenance(db *sql.DB, doc *SQLiteReportDocument) error
 func specProvenanceDisplay(doc SQLiteReportDocument) string {
 	switch doc.SpecProvenance {
 	case artifact.SpecProvenanceGenerated:
+		if doc.SpecSuite != "" {
+			return "Suite " + doc.SpecSuite
+		}
 		return "Generated default sweep (" + doc.SpecGenerator.Tool + ")"
 	case artifact.SpecProvenanceEdited:
-		return "Custom grid (edited after generation)"
+		return "Legacy plan (edited)"
 	default:
-		return "Custom grid (hand-authored)"
+		return "Legacy plan"
 	}
 }
 
@@ -1498,8 +1554,11 @@ func trimmedThroughputRows(doc SQLiteReportDocument, existing []SQLiteReportThro
 
 func sqliteReportMetadataItems(doc SQLiteReportDocument) []SQLiteReportMetadataItem {
 	items := []SQLiteReportMetadataItem{
-		{Label: "Spec", Value: specProvenanceDisplay(doc)},
+		{Label: "Execution", Value: specProvenanceDisplay(doc)},
 		{Label: "Engine", Value: joinUnique(engineSummaries(doc.Engines), ", ")},
+		{Label: "Runtime", Value: bench.FirstNonEmpty(joinUnique(engineRuntimeProvenance(doc.Engines), ", "), "-")},
+		{Label: "Speculative", Value: engineSpeculativeDisplay(doc.Engines)},
+		{Label: "Revision", Value: bench.FirstNonEmpty(joinUnique(engineRevisions(doc.Engines), ", "), "-")},
 		{Label: "Runs", Value: fmt.Sprint(len(doc.Runs))},
 		{Label: "Hardware", Value: bench.FirstNonEmpty(doc.Run.Hardware, "-")},
 		{Label: "Quant", Value: bench.FirstNonEmpty(inferQuantization(doc.Profiles, doc.Engines), "-")},
@@ -1521,7 +1580,87 @@ func sqliteReportMetadataItems(doc SQLiteReportDocument) []SQLiteReportMetadataI
 		{Label: "Requests", Value: fmt.Sprintf("%d ok / %d err", doc.RequestSummary.Completed, doc.RequestSummary.Failed)},
 	}
 	items = append(items, servedModelMismatchItems(doc)...)
+	items = append(items, backendObservationItems(doc)...)
 	return items
+}
+
+func backendObservationItems(doc SQLiteReportDocument) []SQLiteReportMetadataItem {
+	var items []SQLiteReportMetadataItem
+	for _, engine := range doc.Engines {
+		profiles := collections.SortedKeys(engine.BackendsByProfile)
+		for _, profile := range profiles {
+			observation := engine.BackendsByProfile[profile]
+			for _, kind := range []string{"attention", "moe", "kv_cache"} {
+				requested := strings.TrimSpace(observation.Requested[kind])
+				observed := strings.TrimSpace(observation.Observed[kind])
+				if requested == "" && observed == "" {
+					continue
+				}
+				if requested == "" {
+					requested = "unspecified"
+				}
+				if observed == "" {
+					observed = "not observed"
+				}
+				items = append(items, SQLiteReportMetadataItem{
+					Label: "Backend " + profile + " / " + strings.ReplaceAll(kind, "_", " "),
+					Value: "requested " + requested + "; observed " + observed,
+				})
+			}
+		}
+	}
+	return items
+}
+
+func engineRevisions(engines []SQLiteReportEngine) []string {
+	values := make([]string, 0, len(engines))
+	for _, engine := range engines {
+		if strings.TrimSpace(engine.ModelRevision) != "" {
+			values = append(values, engine.ModelRevision)
+		}
+	}
+	return values
+}
+
+func engineRuntimeProvenance(engines []SQLiteReportEngine) []string {
+	values := make([]string, 0, len(engines))
+	for _, engine := range engines {
+		parts := []string{engine.RuntimeOwner, engine.RuntimeSource, engine.RuntimeVersion, engine.RuntimeDigest}
+		if value := joinNonEmpty(parts, " / "); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func joinNonEmpty(values []string, separator string) string {
+	var out []string
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return strings.Join(out, separator)
+}
+
+func engineSpeculativeSettings(engines []SQLiteReportEngine) []string {
+	var values []string
+	for _, engine := range engines {
+		values = append(values, engine.SpeculativeDecoding...)
+	}
+	return values
+}
+
+func engineSpeculativeDisplay(engines []SQLiteReportEngine) string {
+	if settings := joinUnique(engineSpeculativeSettings(engines), ", "); settings != "" {
+		return settings
+	}
+	for _, engine := range engines {
+		if engine.DeploymentName != "" {
+			return "disabled"
+		}
+	}
+	return "unknown"
 }
 
 // servedModelMismatchItems surfaces declared-versus-self-reported model
@@ -2348,13 +2487,13 @@ func throughputAxisVisibilityForRows(rows []SQLiteReportThroughputRow) throughpu
 func throughputGroupAxisItems(key throughputGroupKey, visibility throughputAxisVisibility, serverLimit int, mismatchNote string, rows []SQLiteReportThroughputComparisonRow) []SQLiteReportMetadataItem {
 	items := []SQLiteReportMetadataItem{}
 	if visibility.profile && strings.TrimSpace(key.profile) != "" && key.profile != key.contextLabel {
-		items = append(items, SQLiteReportMetadataItem{Label: "Profile", Value: key.profile})
+		items = append(items, SQLiteReportMetadataItem{Label: "Deployment", Value: key.profile})
 	}
 	if serverLimit > 0 {
 		items = append(items, SQLiteReportMetadataItem{Label: "Server limit", Value: contextLabel(serverLimit)})
 	}
 	if workload := comparisonDecodeWorkload(rows); workload != "" {
-		items = append(items, SQLiteReportMetadataItem{Label: "Workload", Value: workload})
+		items = append(items, SQLiteReportMetadataItem{Label: "Case", Value: workload})
 	}
 	if mismatchNote != "" {
 		items = append(items, SQLiteReportMetadataItem{Label: "Context mismatch", Value: mismatchNote})

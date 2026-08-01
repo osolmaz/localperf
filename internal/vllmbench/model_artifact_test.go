@@ -234,7 +234,7 @@ func assertRunCount(t *testing.T, path string, want int) {
 }
 
 func TestSQLiteArtifactWriteNoopWithoutPath(t *testing.T) {
-	if err := writeSQLiteArtifact(t.TempDir(), "", testSpec(), RunSummary{}, ""); err != nil {
+	if err := writeSQLiteArtifact(t.TempDir(), "", testSpec(), RunSummary{}); err != nil {
 		t.Fatalf("writeSQLiteArtifact without path = %v, want nil", err)
 	}
 }
@@ -246,7 +246,7 @@ func TestSQLiteArtifactWriteRejectsInvalidSpecBeforeCreatingFile(t *testing.T) {
 	// Artifact writing repeats spec validation at the persistence boundary.
 	// An invalid run must not leave a file behind.
 	spec.Workloads[0].Role = ""
-	err := writeSQLiteArtifact(filepath.Join(dir, "run"), artifactPath, spec, RunSummary{StartedAt: time.Now()}, "")
+	err := writeSQLiteArtifact(filepath.Join(dir, "run"), artifactPath, spec, RunSummary{StartedAt: time.Now()})
 	if err == nil {
 		t.Fatal("write with invalid workload succeeded")
 	}
@@ -265,7 +265,7 @@ func TestSQLiteArtifactWriteRemovesFreshFileWhenRunEvidenceIsMissing(t *testing.
 		t.Fatal(err)
 	}
 	artifactPath := filepath.Join(dir, "model.sqlite")
-	err := writeSQLiteArtifact(runDir, artifactPath, testSpec(), RunSummary{StartedAt: time.Now()}, "")
+	err := writeSQLiteArtifact(runDir, artifactPath, testSpec(), RunSummary{StartedAt: time.Now()})
 	if err == nil || !strings.Contains(err.Error(), "normalized spec") {
 		t.Fatalf("write error = %v, want missing normalized spec", err)
 	}

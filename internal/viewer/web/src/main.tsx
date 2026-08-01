@@ -241,7 +241,7 @@ function ReportView({ report }: { report: ReportSummary }) {
 }
 
 function SummaryStrip({ summary }: { summary: Summary }) {
-  const visibleMeta = summary.metadata.slice(0, 8);
+  const visibleMeta = summary.metadata.slice(0, 16);
   return (
     <section className="summary-strip">
       {summary.warnings.map((warning) => (
@@ -290,7 +290,7 @@ function ThroughputTableView({ table, reportID }: { table: ThroughputTable; repo
           <div className="subline">
             <span>Server limit {table.server_limit_label}</span>
             {table.context_label && <span>Context {table.context_label}</span>}
-            {table.decode_workload && <span>Workload {table.decode_workload}</span>}
+            {table.decode_workload && <span>Case {table.decode_workload}</span>}
             <span className={`status status-${table.context_status}`}>{table.context_status_label}</span>
           </div>
         </div>
@@ -464,8 +464,8 @@ function DetailBody({ detail, metric }: { detail: LoadState<CellDetail> | null; 
     ] : []),
     ...(value.source ? [{ label: "Source", value: value.source }] : []),
     { label: "Model", value: value.model || "-" },
-    { label: "Profile", value: value.profile || "-" },
-    { label: "Workload", value: value.workload || "-" },
+    { label: "Deployment", value: value.profile || "-" },
+    { label: "Case", value: value.workload || "-" },
     { label: "Context", value: value.context_label || "-" },
     { label: "Users", value: String(value.concurrency || "-") },
     { label: "Shape", value: value.shape || metric.shape || "-" },
