@@ -1,16 +1,15 @@
 # localperf
 
 localperf is a local LLM inference benchmark CLI.
-It runs benchmark plans against local inference servers, collects all evidence
+It runs named benchmark suites against declared deployments, collects all evidence
 in one portable SQLite artifact per model, and renders reports that only label
 what the measurements actually confirm.
 
-It is currently focused on vLLM-managed runs, with an engine-neutral benchmark
-spec and CLI shape:
+It is currently focused on vLLM-managed runs:
 
 ```sh
-localperf sweep plan --model <model-id> --out spec.json
-localperf bench run  --spec spec.json --artifact runs/models/<model-slug>.sqlite
+localperf bench run --suite practical-64k --deployment deployment.json \
+  --artifact runs/models/<model-slug>.sqlite
 localperf artifact render runs/models/<model-slug>.sqlite
 localperf view runs/models/<model-slug>.sqlite
 ```
@@ -38,41 +37,35 @@ appears below.
 
 ## Quick Start
 
-Generate the default context/concurrency sweep spec instead of hand-writing
-the grid:
+Copy the deployment example and set its model, pinned runtime, server options,
+and safety floor:
 
 ```sh
-localperf sweep plan \
-  --model nvidia/diffusiongemma-26B-A4B-it-NVFP4 \
-  --contexts 4k,8k,16k,32k --concurrency 1,4,8 \
-  --out spec.json
+cp examples/deployments/vllm-managed.json deployment.json
 ```
 
-Preview the planned runs without starting a model:
+Validate the practical suite and write its exact execution plan without
+starting the model:
 
 ```sh
-localperf bench plan --spec spec.json
+localperf bench run --dry-run \
+  --suite practical-64k \
+  --deployment deployment.json \
+  --run-dir /tmp/localperf-practical-dry
 ```
 
-Run one dry benchmark case and validate the artifact:
+The run directory contains `suite.json`, a redacted `deployment.json`, and
+`execution-plan.json`. Validate its SQLite artifact:
 
 ```sh
-localperf bench run \
-  --dry-run \
-  --spec spec.json \
-  --profile 4k-reference \
-  --workload max-throughput-reference \
-  --concurrency 1 \
-  --run-dir /tmp/localperf-onecase-dry
-
-localperf artifact check /tmp/localperf-onecase-dry.sqlite
+localperf artifact check /tmp/localperf-practical-dry.sqlite
 ```
 
-Run the full spec only when the machine is ready for it, pointing batches at
+Run the full suite only when the machine is ready for it, pointing batches at
 one model-level artifact:
 
 ```sh
-localperf bench run --spec spec.json --timeout 4h \
+localperf bench run --suite practical-64k --deployment deployment.json --timeout 4h \
   --artifact runs/models/<model-slug>.sqlite
 ```
 
@@ -105,19 +98,24 @@ collides with different provenance is refused instead of silently replaced.
 The report lists every run and aggregates repeated points across runs with
 mean ± spread.
 
-## Spec Provenance
+## Suites and deployments
 
-Create specs with `sweep plan`; machine-specific runtime choices are flags
-(`--vllm-command`, `--gpu-memory-utilization`, `--kv-cache-memory-bytes`),
-and deliberate ladder caps are declared trims with reasons
-(`--trim 64k=8:'12 GiB KV budget'`) that render in reports like adaptive
-skips. Generated specs carry a verified `generator` stamp: reports label
-runs "Generated default sweep" only while the spec's content hash still
-matches, and anything hand-written or edited shows as "Custom grid".
+The built-in suites are `practical-64k`, `throughput-4k`, and
+`context-ladder`. A suite owns the cases, token shapes, exact request batches,
+and repeats. A deployment owns the model revision, pinned runtime, requested
+backends, server options, client options, and memory floor. LocalPerf derives
+`max_model_len` and `max_num_seqs` from the selected suite cases and refuses
+runtime arguments that try to override those limits.
+
+`practical-64k` always contains `generate-empty` and `generate-full` at c1 and
+c6, with three repeats: exactly 12 measurements. Every successful practical
+measurement provides both decode and effective-prefill values in the existing
+throughput table. Use repeatable `--case` and `--concurrency` flags only for a
+small smoke run or a deliberate subset.
 
 ## Context Semantics
 
-Every workload must declare what its context number means:
+Every suite case declares what its context number means:
 
 ```json
 "context_target": 32768,
@@ -128,23 +126,27 @@ Every workload must declare what its context number means:
 and is validated: the requested input+output must land within 90–100% of the
 target, on the random dataset, with a fixed range ratio. `"capacity"` marks a
 server-limit/concurrency point and must match the profile's `max_model_len`.
-Specs that conflate the two are refused before any GPU time is spent, and the
+Suites that conflate the two are refused before any GPU time is spent, and the
 report labels rows only by declared-and-measured active context or by the
 measured token shape, never by `max_model_len` alone. See
 [Context Semantics](docs/2026-07-02-context-semantics.md) for the contract.
 
-Every workload also declares its role:
+Every case also declares its role:
 
 ```json
 "role": "benchmark"
 ```
 
-Use `num_prompts` for a fixed request count or `prompts_per_user` to scale requests with concurrency. LocalPerf does not impose a statistical sample floor; choose counts and repeats that fit the benchmark. Use `"diagnostic"` for probes and troubleshooting. Diagnostic evidence stays in the SQLite artifact but is excluded from benchmark reports and comparisons. Only validated SQLite artifacts written by `localperf bench run` are reportable; raw result JSON and run directories are not accepted report inputs.
+Each case lists explicit `{concurrency, requests}` batches. There is no public
+request-scaling rule. Use `"diagnostic"` for probes and troubleshooting.
+Diagnostic evidence stays in the SQLite artifact but is excluded from
+benchmark reports and comparisons. Only validated SQLite artifacts written by
+`localperf bench run` are reportable; raw result JSON and run directories are
+not accepted report inputs.
 
-These checks apply to every workload, whether a spec was generated or written
-by hand. LocalPerf validates the complete spec on load, after filtering and
-dataset materialization, immediately before execution, and again before
-writing an artifact. It also requires exact request counts, concurrency, token
+LocalPerf validates the suite and deployment before compiling an exact
+execution plan, after dataset materialization, immediately before execution,
+and again before writing an artifact. It also requires exact request counts, concurrency, token
 totals, and throughput fields from every successful result. Artifact append,
 merge, check, render, and view run full validation and reject schema drift,
 contract violations, broken foreign keys, or mismatched evidence hashes.
@@ -181,7 +183,7 @@ sqlite3 runs/models/<model-slug>.sqlite \
 
 ## Memory Safety
 
-Specs include a `safety.min_mem_available_gib` floor. localperf checks
+Deployments include a `safety.min_mem_available_gib` floor. localperf checks
 `/proc/meminfo` before major steps and while subprocesses run. If available
 memory drops below the floor, the current step is stopped and skipped/failed
 rows are recorded.
@@ -201,6 +203,5 @@ the memory reporting policy.
 
 ## Example
 
-`examples/sharegpt-chat-smoke/spec.json` shows the current strict spec format
-for a small diagnostic chat run. Replace its model and endpoint settings before
-running it.
+`examples/deployments/vllm-managed.json` shows the strict deployment format.
+Replace its model and runtime settings before running a suite.

@@ -133,14 +133,12 @@ Widen the band only deliberately and in this doc, not ad hoc in code.
 These rules apply at render time from data in the SQLite artifact
 (`requests.prompt_tokens`, `requests.completion_tokens`).
 
-## Sweep generation
+## Suite compilation
 
-Default sweeps must come from `localperf sweep plan`, which emits the
-context/concurrency grid with shapes that satisfy rule 1 by construction and
-with `context_target`/`context_semantics` filled in. Hand-authored specs stay
-legal but must declare their semantics explicitly and pass the same
-validation. The default grid and shape derivation live in
-`2026-07-02-default-inference-sweep.md`.
+Built-in suites carry context shapes that satisfy rule 1 by construction and
+fill in `context_target` and `context_semantics`. Custom suites must declare
+the same semantics explicitly and pass the same validation. The built-in
+contracts live in `2026-07-02-default-inference-sweep.md`.
 
 ## Implementation status
 
@@ -150,4 +148,4 @@ Implemented:
    (`validateWorkloadContextSemantics`).
 2. Report labeling rules in `internal/report/html.go`
    (`applyContextLabel`).
-3. `localperf sweep plan` generator in `internal/sweepplan`.
+3. built-in suite definitions in `internal/benchmarkconfig`.

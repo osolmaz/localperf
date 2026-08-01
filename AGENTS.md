@@ -21,16 +21,11 @@ small dry benchmark case and validate the SQLite artifact:
 
 ```sh
 rm -rf /tmp/localperf-onecase-dry /tmp/localperf-onecase-dry.sqlite
-go run ./cmd/localperf sweep plan \
-  --model test/model \
-  --contexts 4k \
-  --concurrency 1 \
-  --out /tmp/localperf-onecase-spec.json
 go run ./cmd/localperf bench run \
   --dry-run \
-  --spec /tmp/localperf-onecase-spec.json \
-  --profile 4k-reference \
-  --workload max-throughput-reference \
+  --suite practical-64k \
+  --deployment examples/deployments/vllm-managed.json \
+  --case generate-empty \
   --concurrency 1 \
   --run-dir /tmp/localperf-onecase-dry
 go run ./cmd/localperf artifact check /tmp/localperf-onecase-dry.sqlite
@@ -39,11 +34,10 @@ go run ./cmd/localperf artifact check /tmp/localperf-onecase-dry.sqlite
 Keep benchmark safety behavior conservative. Do not lower memory floors or
 remove guardrails to make a run pass.
 
-When the user asks for a default context/concurrency sweep, follow
-`docs/2026-07-02-default-inference-sweep.md`. Use the documented `4k`
-max-throughput reference plus the regular active-context `4k`, `8k`, `16k`,
-`32k`, `64k`, `128k` ladder with concurrency `1`, `4`, `8`, `16`, and `32`,
-extending by powers of two only when the hardware can safely take it.
+When the user asks for the practical sweep, use `practical-64k`. For a 4k
+throughput run use `throughput-4k`; for the regular active-context `4k`, `8k`,
+`16k`, `32k`, `64k`, `128k` ladder use `context-ladder`. Do not combine these
+suite contracts or silently add cases.
 
 For repeated benchmark runs of the same model, keep results in one model-level
 SQLite artifact and render 1 HTML report per model. Do not split retry runs,
