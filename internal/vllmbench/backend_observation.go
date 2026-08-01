@@ -2,11 +2,13 @@ package vllmbench
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 type backendObservation struct {
@@ -15,6 +17,29 @@ type backendObservation struct {
 	Evidence      []string          `json:"evidence,omitempty"`
 	AttestedAfter string            `json:"attested_after_request"`
 	Source        string            `json:"source"`
+}
+
+func waitBackendObservation(ctx context.Context, profile Profile, logPath string, offset int64, request string, timeout time.Duration) backendObservation {
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		observation, ok := observeBackendsSince(profile, logPath, offset, request)
+		if ok {
+			return observation
+		}
+		select {
+		case <-ctx.Done():
+			return observation
+		case <-deadline.C:
+			return observation
+		case <-ticker.C:
+		}
+	}
 }
 
 func observeBackends(profile Profile, logPath string) (backendObservation, bool) {

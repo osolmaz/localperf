@@ -130,6 +130,17 @@ func TestSuiteDerivesServerLimitsAndRejectsOverrides(t *testing.T) {
 	if _, err := Compile(suite, deployment, Selection{}); err == nil || !strings.Contains(err.Error(), "server.speculative_decoding contains --gpu-memory-utilization") {
 		t.Fatalf("speculative override error = %v", err)
 	}
+	for field, mutate := range map[string]func(*Deployment){
+		"runtime.args":                func(value *Deployment) { value.Runtime.Args = []string{"--api-key", "do-not-persist"} },
+		"server.speculative_decoding": func(value *Deployment) { value.Server.SpeculativeDecoding = []string{"--hf-token=do-not-persist"} },
+	} {
+		deployment = testDeployment()
+		mutate(&deployment)
+		_, err := Compile(suite, deployment, Selection{})
+		if err == nil || !strings.Contains(err.Error(), field+" contains credential flag") || strings.Contains(err.Error(), "do-not-persist") {
+			t.Fatalf("credential argument rejection for %s = %v", field, err)
+		}
+	}
 }
 
 func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
@@ -143,6 +154,9 @@ func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if compiled.Spec.Profiles[0].Env["HF_TOKEN"] != "secret-token" {
+		t.Fatal("runtime credential was not propagated to the HTTP profile")
+	}
 	dir := t.TempDir()
 	if err := WriteExecutionFiles(dir, compiled); err != nil {
 		t.Fatal(err)
@@ -152,12 +166,14 @@ func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "deployment.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), "secret") || strings.Count(string(data), "redacted") != 5 || !strings.Contains(string(data), "yes") {
-		t.Fatalf("unexpected redacted deployment: %s", data)
+	for _, name := range []string{"deployment.json", "execution-plan.json"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "secret") || !strings.Contains(string(data), "redacted") || !strings.Contains(string(data), "yes") {
+			t.Fatalf("unexpected redacted %s: %s", name, data)
+		}
 	}
 }
 

@@ -966,7 +966,7 @@ func executeBackendCanary(ctx context.Context, spec Spec, planned PlannedRun, ru
 	if err == nil {
 		err = validateBackendCanaryResult(canary)
 	}
-	observation, _ := observeBackendsSince(planned.Profile, serverLogPath, serverLogStart, fmt.Sprintf("%s c%d canary", planned.Workload.Name, planned.Concurrency))
+	observation := waitBackendObservation(ctx, planned.Profile, serverLogPath, serverLogStart, fmt.Sprintf("%s c%d canary", planned.Workload.Name, planned.Concurrency), time.Duration(spec.Safety.HTTPTimeoutSec)*time.Second)
 	events.Write(Event{
 		Timestamp: time.Now().UTC(), Type: "backend_observation", Profile: planned.Profile.Name,
 		Workload: planned.Workload.Name, Concurrency: planned.Concurrency, Details: mustJSON(observation),
