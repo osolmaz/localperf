@@ -391,8 +391,8 @@ func traffic(client Client, input, output int, detailed bool) vllmbench.Benchmar
 }
 
 func selectCases(cases []Case, selection Selection) ([]Case, error) {
-	wantedCases := stringSet(selection.Cases)
-	wantedConcurrency := intSet(selection.Concurrencies)
+	wantedCases := valueSet(selection.Cases)
+	wantedConcurrency := valueSet(selection.Concurrencies)
 	seenCases := map[string]bool{}
 	seenConcurrency := map[int]bool{}
 	var out []Case
@@ -625,15 +625,8 @@ func defaultString(value, fallback string) string {
 	return value
 }
 func boolPointer(value bool) *bool { return &value }
-func stringSet(values []string) map[string]bool {
-	out := map[string]bool{}
-	for _, value := range values {
-		out[value] = true
-	}
-	return out
-}
-func intSet(values []int) map[int]bool {
-	out := map[int]bool{}
+func valueSet[T comparable](values []T) map[T]bool {
+	out := map[T]bool{}
 	for _, value := range values {
 		out[value] = true
 	}
