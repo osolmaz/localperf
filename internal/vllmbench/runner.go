@@ -99,6 +99,8 @@ type runSession struct {
 	ladderRows             map[string]*ReportRow
 	ladderStops            map[string]adaptiveStop
 	reportedMaxConcurrency map[string]float64
+	backendAttempted       map[string]bool
+	backendObserved        map[string]bool
 }
 
 func Execute(ctx context.Context, spec Spec, opts RunOptions) (RunSummary, error) {
@@ -182,6 +184,8 @@ func initRunSession(ctx context.Context, spec Spec, opts RunOptions) *runSession
 		ladderRows:             map[string]*ReportRow{},
 		ladderStops:            map[string]adaptiveStop{},
 		reportedMaxConcurrency: map[string]float64{},
+		backendAttempted:       map[string]bool{},
+		backendObserved:        map[string]bool{},
 	}
 }
 
@@ -439,6 +443,7 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	if err := checkMemoryEvent(session.spec, session.events, "before_workload", planned.Profile.Name); err != nil {
 		return session.handleWorkloadError(profile, proc, runs, index, planned, "workload_skipped", err)
 	}
+	backendLogStart := serverLogOffset(proc)
 	result, err := executeBench(session.ctx, session.spec, planned, session.runDir, session.events)
 	if err != nil {
 		session.stopLadder(planned, fmt.Sprintf("concurrency %d failed: %v", planned.Concurrency, err))
@@ -450,9 +455,32 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	if result != nil {
 		session.summary.Rows = append(session.summary.Rows, *result)
 	}
+	session.recordBackendObservation(planned, proc, backendLogStart)
 	session.updateLadder(planned, result)
 	session.writeArtifactSnapshot()
 	return false
+}
+
+func (session *runSession) recordBackendObservation(planned PlannedRun, proc *serverProcess, logStart int64) {
+	profile := planned.Profile.Name
+	if session.backendObserved[profile] {
+		return
+	}
+	logPath := ""
+	if proc != nil {
+		logPath = proc.logPath
+	}
+	observation, observed := observeBackendsSince(planned.Profile, logPath, logStart, backendRequestLabel(planned))
+	if session.backendAttempted[profile] && !observed {
+		return
+	}
+	session.events.Write(Event{
+		Timestamp: time.Now().UTC(), Type: "backend_observation",
+		Profile: profile, Workload: planned.Workload.Name, Concurrency: planned.Concurrency,
+		Repeat: planned.Repeat, Details: mustJSON(observation),
+	})
+	session.backendAttempted[profile] = true
+	session.backendObserved[profile] = observed
 }
 
 // skipPlannedRun records an adaptive skip: skipped is a first-class outcome
@@ -781,15 +809,6 @@ func (waiter *readinessWaiter) probeReady() bool {
 			Details:   mustJSON(identity),
 		})
 	}
-	logPath := ""
-	if waiter.proc != nil {
-		logPath = waiter.proc.logPath
-	}
-	observation, _ := observeBackends(waiter.profile, logPath)
-	waiter.events.Write(Event{
-		Timestamp: time.Now().UTC(), Type: "backend_observation",
-		Profile: waiter.profile.Name, Details: mustJSON(observation),
-	})
 	return true
 }
 

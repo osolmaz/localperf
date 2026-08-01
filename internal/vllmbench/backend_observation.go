@@ -2,30 +2,44 @@ package vllmbench
 
 import (
 	"bufio"
+	"fmt"
+	"io"
 	"os"
 	"strings"
 )
 
 type backendObservation struct {
-	Requested map[string]string `json:"requested"`
-	Observed  map[string]string `json:"observed,omitempty"`
-	Evidence  []string          `json:"evidence,omitempty"`
+	Requested     map[string]string `json:"requested"`
+	Observed      map[string]string `json:"observed,omitempty"`
+	Evidence      []string          `json:"evidence,omitempty"`
+	AttestedAfter string            `json:"attested_after_request"`
 }
 
 func observeBackends(profile Profile, logPath string) (backendObservation, bool) {
+	return observeBackendsSince(profile, logPath, 0, "test request")
+}
+
+// observeBackendsSince reads only server output produced while handling a
+// validated generation request. Startup selections are deliberately excluded:
+// loading a backend is not evidence that its kernels executed for the model.
+func observeBackendsSince(profile Profile, logPath string, offset int64, request string) (backendObservation, bool) {
 	observation := backendObservation{
 		Requested: map[string]string{
 			"attention": strings.TrimSpace(profile.AttentionBackend),
 			"moe":       strings.TrimSpace(profile.MoEBackend),
 			"kv_cache":  strings.TrimSpace(profile.KVCacheDType),
 		},
-		Observed: map[string]string{},
+		Observed:      map[string]string{},
+		AttestedAfter: request,
 	}
 	file, err := os.Open(logPath)
 	if err != nil {
 		return observation, false
 	}
 	defer file.Close()
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return observation, false
+	}
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 1024*1024)
@@ -40,6 +54,21 @@ func observeBackends(profile Profile, logPath string) (backendObservation, bool)
 		observation.Evidence = append(observation.Evidence, line)
 	}
 	return observation, len(observation.Observed) > 0
+}
+
+func serverLogOffset(proc *serverProcess) int64 {
+	if proc == nil || strings.TrimSpace(proc.logPath) == "" {
+		return 0
+	}
+	info, err := os.Stat(proc.logPath)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func backendRequestLabel(planned PlannedRun) string {
+	return fmt.Sprintf("%s c%d repeat %d", planned.Workload.Name, planned.Concurrency, planned.Repeat)
 }
 
 func observedBackendLine(line string) (string, string) {

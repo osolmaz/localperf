@@ -1050,7 +1050,7 @@ func validateWorkloadDatasetName(prefix string, workload Workload) []string {
 func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	var issues []string
 	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && len(workload.Batches) == 0 {
-		issues = append(issues, prefix+": num_prompts, prompts_per_user, or batches must be set")
+		issues = append(issues, prefix+": num_prompts or prompts_per_user must be positive, or batches must be set")
 	}
 	countModes := 0
 	if workload.NumPrompts > 0 {
@@ -1063,7 +1063,7 @@ func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 		countModes++
 	}
 	if countModes > 1 {
-		issues = append(issues, prefix+": set exactly one of num_prompts, prompts_per_user, or batches")
+		issues = append(issues, prefix+": set exactly one of num_prompts, prompts_per_user, or batches, not both")
 	}
 	if workload.PromptsPerUser < 0 {
 		issues = append(issues, prefix+": prompts_per_user must not be negative")

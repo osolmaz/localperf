@@ -292,15 +292,17 @@ func builtinSuite(name string) (Suite, bool) {
 }
 
 func practicalSuite() Suite {
+	fullBudget := activeTokenBudget(65536)
 	return Suite{Version: Version, Name: "practical-64k", Description: "Generation at minimal and near-full 64k context; every point reports decode and effective prefill.", Warmup: defaultWarmup(), Cases: []Case{
 		benchmarkCase("generate-empty", "decode", 1, 1024, 65536, vllmbench.ContextSemanticsCapacity, []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
-		benchmarkCase("generate-full", "decode", 64512, 1024, 65536, vllmbench.ContextSemanticsActive, []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
+		benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, vllmbench.ContextSemanticsActive, []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
 	}}
 }
 
 func throughputSuite() Suite {
+	budget := activeTokenBudget(4096)
 	return Suite{Version: Version, Name: "throughput-4k", Description: "4k generation throughput at an explicit concurrency ladder.", Warmup: defaultWarmup(), Cases: []Case{
-		benchmarkCase("throughput-4k", "decode", 3072, 1024, 4096, vllmbench.ContextSemanticsActive, standardBatches(), 3),
+		benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, vllmbench.ContextSemanticsActive, standardBatches(), 3),
 	}}
 }
 
@@ -312,12 +314,24 @@ func contextSuite() Suite {
 		if context >= 131072 {
 			batches = []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}}
 		}
+		budget := activeTokenBudget(context)
 		suite.Cases = append(suite.Cases,
-			benchmarkCase("prefill-"+label, "prefill", context-1, 1, context, vllmbench.ContextSemanticsActive, batches, 1),
-			benchmarkCase("decode-"+label, "decode", context-1024, 1024, context, vllmbench.ContextSemanticsActive, batches, 1),
+			benchmarkCase("prefill-"+label, "prefill", budget-1, 1, context, vllmbench.ContextSemanticsActive, batches, 1),
+			benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, vllmbench.ContextSemanticsActive, batches, 1),
 		)
 	}
 	return suite
+}
+
+// activeTokenBudget leaves two percent of the server limit for chat-template
+// tokens and tokenizer drift. The resulting request remains well inside the
+// validated 90%-100% active-context band.
+func activeTokenBudget(context int) int {
+	headroom := context / 50
+	if headroom < 64 {
+		headroom = 64
+	}
+	return context - headroom
 }
 
 func defaultWarmup() Warmup {
@@ -550,6 +564,11 @@ func sensitiveKey(key string) bool {
 	upper := strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
 	for _, token := range []string{"TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "AUTHORIZATION", "COOKIE"} {
 		if strings.Contains(upper, token) {
+			return true
+		}
+	}
+	for _, part := range strings.Split(upper, "_") {
+		if part == "KEY" || part == "PASSPHRASE" || part == "PRIVATE" {
 			return true
 		}
 	}
