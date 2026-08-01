@@ -1058,6 +1058,21 @@ func TestExecuteAttestsConcreteBackendForEachWorkloadPoint(t *testing.T) {
 	if got := strings.Count(string(events), `"type":"backend_attestation_finish"`); got != 2 {
 		t.Fatalf("point attestations = %d, want one for each concurrency despite repeats:\n%s", got, events)
 	}
+	db, err := sql.Open("sqlite", summary.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var canaryArtifacts, measurements int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM artifacts WHERE kind = 'backend_attestation_result'`).Scan(&canaryArtifacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM measurements`).Scan(&measurements); err != nil {
+		t.Fatal(err)
+	}
+	if canaryArtifacts != 2 || measurements != 4 {
+		t.Fatalf("canary artifacts/measurements = %d/%d, want 2/4", canaryArtifacts, measurements)
+	}
 }
 
 func TestExecuteHTTPProfiledCanaryControlsProfilerEndpoints(t *testing.T) {

@@ -589,7 +589,12 @@ func (inserter artifactInserter) addEventArtifacts(events []Event) error {
 	for _, event := range events {
 		if eventHasArtifactResult(event) {
 			name := rawResultArtifactName(event)
-			if err := inserter.add(artifactSpec{"bench_raw_result", name, event.ResultFile, "application/json"}); err != nil {
+			kind := "bench_raw_result"
+			if event.Type == "backend_attestation_finish" {
+				kind = "backend_attestation_result"
+				name = "backend-attestation-" + name
+			}
+			if err := inserter.add(artifactSpec{kind, name, event.ResultFile, "application/json"}); err != nil {
 				return err
 			}
 		}
@@ -1328,7 +1333,7 @@ func eventHasImportableResult(event Event) bool {
 }
 
 func eventHasArtifactResult(event Event) bool {
-	return event.ResultFile != "" && (event.Type == "workload_finish" || event.Type == "warmup_finish" || event.Type == "workload_resumed")
+	return event.ResultFile != "" && (event.Type == "workload_finish" || event.Type == "warmup_finish" || event.Type == "workload_resumed" || event.Type == "backend_attestation_finish")
 }
 
 func eventDetailBool(event Event, key string) bool {
