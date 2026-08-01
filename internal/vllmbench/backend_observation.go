@@ -72,17 +72,17 @@ func backendRequestLabel(planned PlannedRun) string {
 }
 
 func observedBackendLine(line string) (string, string) {
-	if strings.Contains(line, "attention") && backendSelectionLine(line) {
+	if strings.Contains(line, "attention") && backendExecutionLine(line) {
 		if value := knownBackend(line, attentionBackendNames); value != "" {
 			return "attention", value
 		}
 	}
-	if strings.Contains(line, "moe") && backendSelectionLine(line) {
+	if strings.Contains(line, "moe") && backendExecutionLine(line) {
 		if value := knownBackend(line, moeBackendNames); value != "" {
 			return "moe", value
 		}
 	}
-	if strings.Contains(line, "kv cache dtype") || strings.Contains(line, "kv_cache_dtype") {
+	if (strings.Contains(line, "kv cache dtype") || strings.Contains(line, "kv_cache_dtype")) && kvCacheExecutionLine(line) {
 		if value := knownBackend(line, kvCacheDTypeNames); value != "" {
 			return "kv_cache", value
 		}
@@ -90,9 +90,25 @@ func observedBackendLine(line string) (string, string) {
 	return "", ""
 }
 
-func backendSelectionLine(line string) bool {
-	return strings.Contains(line, "using ") || strings.Contains(line, "selected") ||
-		strings.Contains(line, "backend is") || strings.Contains(line, "backend:")
+func backendExecutionLine(line string) bool {
+	if !strings.Contains(line, "kernel") {
+		return false
+	}
+	for _, marker := range []string{"dispatched ", "dispatching ", "executed ", "executing ", "launched ", "launching ", "ran ", "running "} {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func kvCacheExecutionLine(line string) bool {
+	for _, marker := range []string{"allocated ", "allocating ", "cache block"} {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type backendName struct {

@@ -213,7 +213,9 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		return Compiled{}, err
 	}
 	spec.Generator = &artifact.GeneratorStamp{Tool: "localperf-suite", Version: Version, Intent: intent}
-	hash, err := vllmbench.SpecContentHash(spec)
+	// Artifacts persist the redacted execution document. Hash that exact form
+	// so credentials never affect provenance and the stored bytes verify.
+	hash, err := vllmbench.SpecContentHash(vllmbench.RedactedSpec(spec))
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -567,8 +569,11 @@ func sensitiveKey(key string) bool {
 			return true
 		}
 	}
-	for _, part := range strings.Split(upper, "_") {
-		if part == "KEY" || part == "PASSPHRASE" || part == "PRIVATE" {
+	for _, part := range strings.FieldsFunc(upper, func(char rune) bool {
+		return !((char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9'))
+	}) {
+		switch part {
+		case "AUTH", "KEY", "PASS", "PASSPHRASE", "PRIVATE":
 			return true
 		}
 	}

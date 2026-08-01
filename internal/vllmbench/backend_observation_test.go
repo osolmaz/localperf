@@ -8,7 +8,7 @@ import (
 
 func TestObserveBackendsRecordsRequestedAndObservedFallback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.log")
-	data := []byte("INFO Using FLASH_ATTN attention backend\nINFO Using triton backend for MoE\nINFO KV cache dtype: fp8_e4m3\n")
+	data := []byte("INFO executed FLASH_ATTN attention kernel\nINFO dispatched triton kernel for MoE\nINFO allocated KV cache dtype fp8_e4m3 for request\n")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,18 @@ func TestObservedBackendLineIgnoresConfigurationEcho(t *testing.T) {
 	}
 }
 
+func TestObservedBackendLineIgnoresSelectionWithoutKernelEvidence(t *testing.T) {
+	for _, line := range []string{
+		"using flash_attn attention backend",
+		"request complete; selected triton backend for moe",
+		"kv cache dtype: fp8_e4m3",
+	} {
+		if kind, value := observedBackendLine(line); kind != "" || value != "" {
+			t.Fatalf("selection reported as execution evidence: %q => %q %q", line, kind, value)
+		}
+	}
+}
+
 func TestObserveBackendsSinceExcludesStartupSelection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.log")
 	startup := []byte("INFO Using FLASH_ATTN attention backend\n")
@@ -42,7 +54,7 @@ func TestObserveBackendsSinceExcludesStartupSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteString("INFO request complete\nINFO selected triton backend for MoE\n"); err != nil {
+	if _, err := file.WriteString("INFO dispatched triton MoE kernel while serving request\nINFO request complete\n"); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
