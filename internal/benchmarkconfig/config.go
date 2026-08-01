@@ -352,6 +352,9 @@ func benchmarkCase(name, phase string, input, output, target int, semantics stri
 }
 
 func compileWarmup(warmup Warmup, client Client) vllmbench.WarmupConfig {
+	if defaultString(client.LoadGenerator, vllmbench.LoadGeneratorVLLMBench) == vllmbench.LoadGeneratorHTTP {
+		return vllmbench.WarmupConfig{Enabled: false}
+	}
 	return vllmbench.WarmupConfig{Enabled: warmup.Enabled, NumPrompts: warmup.Requests, MaxConcurrency: warmup.Concurrency, BenchmarkTrafficConfig: traffic(client, warmup.InputTokens, warmup.OutputTokens, false)}
 }
 
