@@ -7,12 +7,18 @@ import (
 
 func TestCommandSurfaceContainsOnlyValidatedWorkflows(t *testing.T) {
 	for name := range rootHandlers {
-		if name != "bench" && name != "artifact" && name != "sweep" && name != "view" {
+		if name != "bench" && name != "artifact" && name != "view" {
 			t.Fatalf("unexpected root command %q", name)
 		}
 	}
-	if len(benchHandlers) != 2 || benchHandlers["plan"] == nil || benchHandlers["run"] == nil {
-		t.Fatalf("bench commands = %v, want plan/run only", benchHandlers)
+	if len(benchHandlers) != 1 || benchHandlers["run"] == nil {
+		t.Fatalf("bench commands = %v, want run only", benchHandlers)
+	}
+	if _, ok := rootHandlers["sweep"]; ok {
+		t.Fatal("generic sweep planner is exposed")
+	}
+	if _, ok := benchHandlers["plan"]; ok {
+		t.Fatal("generic benchmark planner is exposed")
 	}
 	if _, ok := benchHandlers["http-load"]; ok {
 		t.Fatal("raw HTTP load command is exposed")

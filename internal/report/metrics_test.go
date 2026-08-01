@@ -173,7 +173,7 @@ func TestThroughputGroupsPreserveDistinctGenerationWorkloads(t *testing.T) {
 			t.Fatalf("rows in group = %d, want one disjoint point: %+v", len(group.Rows), group)
 		}
 		workloads[group.Rows[0].DecodeDetail.Workload]++
-		if !metadataHasValue(group.AxisItems, "Workload", group.Rows[0].DecodeDetail.Workload) {
+		if !metadataHasValue(group.AxisItems, "Case", group.Rows[0].DecodeDetail.Workload) {
 			t.Fatalf("group does not expose workload identity: %+v", group.AxisItems)
 		}
 	}

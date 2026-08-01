@@ -6,7 +6,7 @@ go:
   exclude:
     - "**/*_test.go"
     - pattern: "examples/**"
-      reason: benchmark fixture specs and example scripts, not production library code
+      reason: example deployment documents, not production library code
     - pattern: "runs/**"
       reason: generated benchmark outputs and local run data
     - pattern: "docs/**"
@@ -19,7 +19,7 @@ go:
     exclude:
       - "**/*_test.go"
       - pattern: "examples/**"
-        reason: benchmark fixture specs and example scripts, not production library code
+        reason: example deployment documents, not production library code
       - pattern: "runs/**"
         reason: generated benchmark outputs and local run data
       - pattern: "docs/**"
@@ -48,11 +48,12 @@ go:
         - internal/artifact
         - internal/report
         - internal/collections
+        - internal/benchmarkconfig
         - internal/vllmbench
-        - internal/sweepplan
         - internal/viewer
-    - from: internal/sweepplan
+    - from: internal/benchmarkconfig
       allow:
+        - internal/artifact
         - internal/vllmbench
     - from: internal/bench
       allow: []

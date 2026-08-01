@@ -1,0 +1,37 @@
+{
+  "version": "1",
+  "name": "example-vllm",
+  "model": "test/model",
+  "model_revision": "replace-with-immutable-revision",
+  "runtime": {
+    "name": "vllm",
+    "type": "vllm-managed",
+    "owner": "vllm-project",
+    "source": "official release",
+    "version": "replace-with-pinned-version",
+    "command": "vllm",
+    "bench_command": "vllm",
+    "managed": true,
+    "host": "127.0.0.1",
+    "port": 8101
+  },
+  "server": {
+    "gpu_memory_utilization": 0.5,
+    "kv_cache_dtype": "auto",
+    "attention_backend": "auto",
+    "moe_backend": "auto",
+    "enable_prefix_caching": false
+  },
+  "client": {
+    "load_generator": "vllm_bench",
+    "backend": "openai-chat",
+    "endpoint": "/v1/chat/completions"
+  },
+  "safety": {
+    "min_mem_available_gib": 40,
+    "poll_interval_millis": 1000,
+    "startup_timeout_sec": 900,
+    "workload_timeout_sec": 1800,
+    "http_timeout_sec": 15
+  }
+}

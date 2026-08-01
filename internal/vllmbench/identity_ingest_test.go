@@ -44,6 +44,15 @@ func TestArtifactIngestsIdentityAndGPUTelemetryEvents(t *testing.T) {
 			}),
 		},
 		{
+			Timestamp: now,
+			Type:      "backend_observation",
+			Profile:   planned.Profile.Name,
+			Details: mustJSON(backendObservation{
+				Requested: map[string]string{"attention": "flashinfer"},
+				Observed:  map[string]string{"attention": "flash_attn"},
+			}),
+		},
+		{
 			Timestamp:   now,
 			Type:        "gpu_telemetry",
 			Profile:     planned.Profile.Name,
@@ -73,7 +82,7 @@ func TestArtifactIngestsIdentityAndGPUTelemetryEvents(t *testing.T) {
 
 	artifactPath := filepath.Join(dir, "run.sqlite")
 	summary := RunSummary{RunDir: runDir, StartedAt: now, FinishedAt: now, PlannedRuns: len(plan)}
-	if err := writeSQLiteArtifact(runDir, artifactPath, spec, summary, ""); err != nil {
+	if err := writeSQLiteArtifact(runDir, artifactPath, spec, summary); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,6 +99,16 @@ func TestArtifactIngestsIdentityAndGPUTelemetryEvents(t *testing.T) {
 	}
 	if version != "0.11.0" || servedModel != "served/other-model" {
 		t.Fatalf("engine identity = %q / %q, want 0.11.0 / served/other-model", version, servedModel)
+	}
+	var requestedBackend, observedBackend string
+	if err := db.QueryRow(`SELECT
+		COALESCE(json_extract(metadata_json, '$.backend_observation.' || ? || '.requested.attention'), ''),
+		COALESCE(json_extract(metadata_json, '$.backend_observation.' || ? || '.observed.attention'), '')
+		FROM engines LIMIT 1`, planned.Profile.Name, planned.Profile.Name).Scan(&requestedBackend, &observedBackend); err != nil {
+		t.Fatal(err)
+	}
+	if requestedBackend != "flashinfer" || observedBackend != "flash_attn" {
+		t.Fatalf("backend evidence = %q / %q, want flashinfer / flash_attn", requestedBackend, observedBackend)
 	}
 	var utilValue float64
 	var measurementID sql.NullInt64
