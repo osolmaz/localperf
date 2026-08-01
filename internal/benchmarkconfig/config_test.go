@@ -110,6 +110,23 @@ func TestExternalHTTPDeploymentDoesNotRequireVLLMCLIWarmup(t *testing.T) {
 	}
 }
 
+func TestHTTPDeploymentRejectsIgnoredCLIClientOptions(t *testing.T) {
+	suite, _ := LoadSuite("practical-64k")
+	for name, mutate := range map[string]func(*Deployment){
+		"tokenizer":  func(value *Deployment) { value.Client.Tokenizer = "custom-tokenizer" },
+		"extra_args": func(value *Deployment) { value.Client.ExtraArgs = []string{"--request-id-prefix", "ignored"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			deployment := testDeployment()
+			deployment.Client.LoadGenerator = vllmbench.LoadGeneratorHTTP
+			mutate(&deployment)
+			if _, err := Compile(suite, deployment, Selection{}); err == nil || !strings.Contains(err.Error(), "unsupported with localperf_http") {
+				t.Fatalf("Compile error = %v", err)
+			}
+		})
+	}
+}
+
 func TestSuiteDerivesServerLimitsAndRejectsOverrides(t *testing.T) {
 	suite, _ := LoadSuite("practical-64k")
 	deployment := testDeployment()
@@ -133,6 +150,7 @@ func TestSuiteDerivesServerLimitsAndRejectsOverrides(t *testing.T) {
 	for field, mutate := range map[string]func(*Deployment){
 		"runtime.args":                func(value *Deployment) { value.Runtime.Args = []string{"--api-key", "do-not-persist"} },
 		"server.speculative_decoding": func(value *Deployment) { value.Server.SpeculativeDecoding = []string{"--hf-token=do-not-persist"} },
+		"client.extra_args":           func(value *Deployment) { value.Client.ExtraArgs = []string{"--auth-token=do-not-persist"} },
 	} {
 		deployment = testDeployment()
 		mutate(&deployment)
