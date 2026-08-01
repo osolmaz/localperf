@@ -43,9 +43,10 @@ backends, server/client options, and safety floor. LocalPerf derives server
 context and sequence limits from the selected suite cases.
 
 When a deployment requests a concrete attention or MoE backend, LocalPerf
-profiles a warmup generation request and reads the emitted CUDA execution table
-before measurements begin. Missing or mismatched kernel evidence stops the run.
-The profiler is inactive during measured cases.
+profiles a separate canary matching every selected case and concurrency point,
+then reads the emitted CUDA execution table before accepting that point.
+Missing or mismatched kernel evidence stops the run. The profiler is inactive
+during timed measurements.
 
 ```sh
 localperf bench run \

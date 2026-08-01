@@ -93,9 +93,11 @@ structured server flags are refused.
 `model_revision`, runtime command/version, requested attention/MoE/KV
 backends, and speculative-decoding arguments are material provenance. Pin and
 review them before real GPU work. A concrete attention or MoE backend enables a
-request-scoped torch-profiler probe during warmup. LocalPerf reads the emitted
-CUDA execution table before starting measured cases; missing or mismatched
-kernel evidence stops the run. The profiler is inactive during measurements.
+request-scoped torch-profiler canary for every selected case and concurrency
+point. Each canary uses the same token shape and request count as its timed
+point. LocalPerf reads the emitted CUDA execution table before accepting that
+point; missing or mismatched kernel evidence stops the run. The profiler is
+inactive during timed measurements.
 External endpoints must use `auto` rather than making a concrete backend claim
 that LocalPerf cannot attest from managed server evidence.
 

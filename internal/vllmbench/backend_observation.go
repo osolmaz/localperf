@@ -139,19 +139,21 @@ func profilerTableFooter(line string) bool {
 }
 
 func profilerBackendLine(profile Profile, line string) (string, string) {
-	requestedAttention := normalizeBackendName(profile.AttentionBackend)
-	if profilerLineMatchesBackend("attention", requestedAttention, line) {
-		return "attention", requestedAttention
-	}
-	if value := knownProfilerBackend("attention", line, attentionBackendNames); value != "" {
-		return "attention", value
-	}
+	// Check MoE first because compound implementations such as
+	// flashinfer_cutlass contain the attention runtime's name too.
 	requestedMoE := normalizeBackendName(profile.MoEBackend)
 	if profilerLineMatchesBackend("moe", requestedMoE, line) {
 		return "moe", requestedMoE
 	}
 	if value := knownProfilerBackend("moe", line, moeBackendNames); value != "" {
 		return "moe", value
+	}
+	requestedAttention := normalizeBackendName(profile.AttentionBackend)
+	if profilerLineMatchesBackend("attention", requestedAttention, line) {
+		return "attention", requestedAttention
+	}
+	if value := knownProfilerBackend("attention", line, attentionBackendNames); value != "" {
+		return "attention", value
 	}
 	if strings.Contains(line, "kv") || strings.Contains(line, "cache") {
 		if value := knownBackend(line, kvCacheDTypeNames); value != "" {

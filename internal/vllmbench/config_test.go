@@ -415,9 +415,8 @@ func TestServeCommandIncludesOptionalRuntimeControls(t *testing.T) {
 	}
 }
 
-func TestConcreteBackendCommandsUseProfiledWarmupAttestation(t *testing.T) {
+func TestConcreteBackendCommandsConfigurePointAttestation(t *testing.T) {
 	spec := testSpec()
-	spec.Warmup.Enabled = true
 	spec.Profiles[0].AttentionBackend = "TRITON_ATTN"
 	spec.Profiles[0].MoEBackend = "cutlass"
 	serve := ShellQuote(ServeCommand(spec, spec.Profiles[0]).Args)
@@ -427,19 +426,18 @@ func TestConcreteBackendCommandsUseProfiledWarmupAttestation(t *testing.T) {
 			t.Fatalf("serve command %q missing %q", serve, want)
 		}
 	}
-	if !strings.Contains(warmup, "--profile") {
-		t.Fatalf("warmup command %q does not start request-scoped profiling", warmup)
+	if strings.Contains(warmup, "--profile") {
+		t.Fatalf("generic warmup command %q must not be used as shape-specific evidence", warmup)
 	}
 }
 
-func TestConcreteBackendRequiresWarmupAttestation(t *testing.T) {
+func TestConcreteBackendRequiresManagedServerAttestation(t *testing.T) {
 	spec := testSpec()
 	spec.Warmup.Enabled = false
 	spec.Profiles[0].AttentionBackend = "flashinfer"
-	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "warmup must be enabled") {
-		t.Fatalf("backend attestation setup error = %v", err)
+	if err := ValidateSpec(spec); err != nil {
+		t.Fatalf("shape-specific attestation should not require generic warmup: %v", err)
 	}
-	spec.Warmup.Enabled = true
 	spec.Profiles[0].Managed = false
 	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "requires a managed server") {
 		t.Fatalf("external backend attestation error = %v", err)
@@ -1028,7 +1026,7 @@ func TestExecuteWithFakeVLLMEndToEnd(t *testing.T) {
 	assertSQLiteArtifact(t, summary.ArtifactPath)
 }
 
-func TestExecuteAttestsConcreteBackendFromProfiledWarmup(t *testing.T) {
+func TestExecuteAttestsConcreteBackendForEachWorkloadPoint(t *testing.T) {
 	spec := testSpec()
 	spec.Name = "fake-vllm-backend-attestation"
 	spec.OutputDir = t.TempDir()
@@ -1040,6 +1038,8 @@ func TestExecuteAttestsConcreteBackendFromProfiledWarmup(t *testing.T) {
 	configureFakeVLLM(t, &spec)
 	spec.Profiles[0].AttentionBackend = "flash_attn"
 	spec.Profiles[0].MoEBackend = "triton"
+	spec.Workloads = []Workload{testRandomWorkload("short", []string{spec.Profiles[0].Name}, 128, 16, 2, []int{1, 2})}
+	spec.Workloads[0].Repeats = 2
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	summary, err := Execute(context.Background(), spec, RunOptions{RunDir: filepath.Join(spec.OutputDir, "run")})
@@ -1050,10 +1050,50 @@ func TestExecuteAttestsConcreteBackendFromProfiledWarmup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"type":"backend_observation"`, `"attention":"flash_attn"`, `"moe":"triton"`} {
+	for _, want := range []string{`"type":"backend_observation"`, `"attention":"flash_attn"`, `"moe":"triton"`, `"attested_after_request":"short c1 canary"`, `"attested_after_request":"short c2 canary"`} {
 		if !strings.Contains(string(events), want) {
 			t.Fatalf("events missing %q:\n%s", want, events)
 		}
+	}
+	if got := strings.Count(string(events), `"type":"backend_attestation_finish"`); got != 2 {
+		t.Fatalf("point attestations = %d, want one for each concurrency despite repeats:\n%s", got, events)
+	}
+}
+
+func TestExecuteHTTPProfiledCanaryControlsProfilerEndpoints(t *testing.T) {
+	var starts, stops atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/start_profile":
+			starts.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case "/stop_profile":
+			stops.Add(1)
+			w.WriteHeader(http.StatusOK)
+		case "/v1/chat/completions":
+			writeFakeSSEChatResponse(w, 1, 128, 16, 144)
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+
+	spec := testSpec()
+	spec.Safety.MinMemAvailableGiB = 0.1
+	spec.Safety.WorkloadTimeoutSec = 5
+	spec.Safety.HTTPTimeoutSec = 2
+	spec.Profiles[0].EndpointBaseURL = server.URL
+	spec.Workloads = []Workload{testRandomWorkload("http-canary", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
+	spec.Workloads[0].LoadGenerator = LoadGeneratorHTTP
+	ApplyDefaults(&spec)
+	planned := BuildPlan(spec, t.TempDir())[0]
+	command := LoadCommand(spec, planned)
+	result, err := executeHTTPProfiledCanary(context.Background(), spec, planned, command, filepath.Join(t.TempDir(), "canary.log"))
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("HTTP profiled canary result = %+v, error = %v", result, err)
+	}
+	if starts.Load() != 1 || stops.Load() != 1 {
+		t.Fatalf("profiler endpoint calls = start %d stop %d, want 1/1", starts.Load(), stops.Load())
 	}
 }
 
@@ -3237,13 +3277,15 @@ func runFakeBench(args []string) {
 	if err := os.MkdirAll(filepath.Dir(resultPath), 0o755); err != nil {
 		os.Exit(1)
 	}
+	inputTokens := numPrompts * positiveFlagInt(args, "--random-input-len", 128)
+	outputTokens := numPrompts * positiveFlagInt(args, "--random-output-len", 16)
 	row := map[string]any{
 		"completed":              numPrompts - failed,
 		"failed":                 failed,
 		"duration":               1.0,
-		"total_input_tokens":     numPrompts * 128,
-		"total_output_tokens":    numPrompts * 16,
-		"total_tokens":           numPrompts * 144,
+		"total_input_tokens":     inputTokens,
+		"total_output_tokens":    outputTokens,
+		"total_tokens":           inputTokens + outputTokens,
 		"output_throughput":      float64(concurrency * 10),
 		"total_token_throughput": float64(concurrency * 12),
 	}
@@ -3267,6 +3309,14 @@ func hasFlag(args []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func positiveFlagInt(args []string, name string, fallback int) int {
+	value, _ := strconv.Atoi(flagValue(args, name))
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func callFakeProfileEndpoint(args []string, endpoint string) error {

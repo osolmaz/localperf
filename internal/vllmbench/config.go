@@ -603,10 +603,6 @@ func validateBackendAttestationSetup(spec Spec) []string {
 		}
 		if !profile.Managed {
 			issues = append(issues, fmt.Sprintf("profile %q requests a concrete attention or MoE backend; profiler attestation requires a managed server", profile.Name))
-			continue
-		}
-		if !spec.Warmup.Enabled {
-			issues = append(issues, fmt.Sprintf("profile %q requests a concrete attention or MoE backend; warmup must be enabled for request-scoped profiler attestation", profile.Name))
 		}
 	}
 	return issues
