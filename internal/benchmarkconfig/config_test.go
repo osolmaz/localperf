@@ -51,6 +51,27 @@ func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
 	}
 }
 
+func TestBuiltinActiveCasesLeaveTemplateHeadroom(t *testing.T) {
+	for _, name := range BuiltinSuiteNames() {
+		suite, err := LoadSuite(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, benchmarkCase := range suite.Cases {
+			if benchmarkCase.ContextSemantics != vllmbench.ContextSemanticsActive {
+				continue
+			}
+			requested := benchmarkCase.InputTokens + benchmarkCase.OutputTokens
+			if requested >= benchmarkCase.ContextTarget {
+				t.Fatalf("%s/%s requests %d tokens against limit %d", name, benchmarkCase.Name, requested, benchmarkCase.ContextTarget)
+			}
+			if float64(requested) < vllmbench.ContextTargetMinFrac*float64(benchmarkCase.ContextTarget) {
+				t.Fatalf("%s/%s requests %d tokens below active-context band for %d", name, benchmarkCase.Name, requested, benchmarkCase.ContextTarget)
+			}
+		}
+	}
+}
+
 func TestSelectionUsesCaseAndConcurrencyTerms(t *testing.T) {
 	suite, _ := LoadSuite("practical-64k")
 	compiled, err := Compile(suite, testDeployment(), Selection{Cases: []string{"generate-full"}, Concurrencies: []int{1}})
@@ -88,7 +109,9 @@ func TestSuiteDerivesServerLimitsAndRejectsOverrides(t *testing.T) {
 func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
 	suite, _ := LoadSuite("practical-64k")
 	deployment := testDeployment()
-	deployment.Runtime.Env = map[string]string{"HF_TOKEN": "secret", "VISIBLE": "yes"}
+	deployment.Runtime.Env = map[string]string{
+		"HF_TOKEN": "secret-token", "AWS_ACCESS_KEY_ID": "secret-key", "SSH_KEY": "secret-ssh", "VISIBLE": "yes",
+	}
 	compiled, err := Compile(suite, deployment, Selection{Cases: []string{"generate-empty"}, Concurrencies: []int{1}})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +129,7 @@ func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "secret") || !strings.Contains(string(data), "redacted") || !strings.Contains(string(data), "yes") {
+	if strings.Contains(string(data), "secret") || strings.Count(string(data), "redacted") != 3 || !strings.Contains(string(data), "yes") {
 		t.Fatalf("unexpected redacted deployment: %s", data)
 	}
 }
