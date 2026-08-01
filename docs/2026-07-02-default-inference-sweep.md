@@ -42,11 +42,11 @@ deployment JSON file owns the model revision, pinned runtime, requested
 backends, server/client options, and safety floor. LocalPerf derives server
 context and sequence limits from the selected suite cases.
 
-When a deployment requests a concrete attention or MoE backend, LocalPerf
-profiles a separate canary matching every selected case and concurrency point,
-then reads the emitted CUDA execution table before accepting that point.
-Missing or mismatched kernel evidence stops the run. The profiler is inactive
-during timed measurements.
+When a managed deployment declares an attention or MoE backend, including
+`auto`, LocalPerf profiles a separate canary matching every selected case and
+concurrency point, then reads the emitted CUDA execution table before accepting
+that point. Missing evidence, or a mismatch against a concrete request, stops
+the run. The profiler is inactive during timed measurements.
 
 ```sh
 localperf bench run \

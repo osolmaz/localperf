@@ -474,6 +474,7 @@ func (session *runSession) failBackendAttestation(profile Profile, proc *serverP
 		Workload: planned.Workload.Name, Concurrency: planned.Concurrency, Repeat: planned.Repeat, Error: err.Error(),
 	})
 	markRunsSkipped(session.events, runs[index+1:], "stopped after backend attestation failed")
+	session.writeArtifactSnapshot()
 	stopProcess(proc)
 	delete(session.processes, profile.Name)
 	session.fatalErr = fmt.Errorf("backend attestation failed for %s/%s c%d: %w", profile.Name, planned.Workload.Name, planned.Concurrency, err)
@@ -556,8 +557,8 @@ func finalizeRun(runDir string, summary *RunSummary, events *eventWriter, spec S
 	if err := writeJSONFile(filepath.Join(runDir, "summary.json"), summary); err != nil {
 		return err
 	}
-	if err := writeFinalArtifact(runDir, summary, spec); err != nil && runErr == nil {
-		return err
+	if err := writeFinalArtifact(runDir, summary, spec); err != nil {
+		return errors.Join(runErr, err)
 	}
 	return finalRunError(*summary, runErr)
 }
@@ -990,13 +991,13 @@ func executeProfiledCanary(ctx context.Context, spec Spec, planned PlannedRun, c
 }
 
 func executeHTTPProfiledCanary(ctx context.Context, spec Spec, planned PlannedRun, command CommandSpec, logPath string) (commandResult, error) {
-	if err := postAdmin(ctx, spec, baseURL(planned.Profile)+"/start_profile"); err != nil {
+	if err := postAdmin(ctx, spec, planned.Profile, baseURL(planned.Profile)+"/start_profile"); err != nil {
 		return commandResult{ExitCode: -1}, fmt.Errorf("start backend profiler: %w", err)
 	}
 	result, runErr := executeLoadCommand(ctx, spec, planned, command, logPath)
 	stopCtx, cancel := context.WithTimeout(context.Background(), time.Duration(spec.Safety.HTTPTimeoutSec)*time.Second)
 	defer cancel()
-	if err := postAdmin(stopCtx, spec, baseURL(planned.Profile)+"/stop_profile"); err != nil {
+	if err := postAdmin(stopCtx, spec, planned.Profile, baseURL(planned.Profile)+"/stop_profile"); err != nil {
 		runErr = errors.Join(runErr, fmt.Errorf("stop backend profiler: %w", err))
 	}
 	return result, runErr
@@ -1296,7 +1297,7 @@ func sleepProfile(ctx context.Context, spec Spec, profile Profile, events *event
 	}
 	url := fmt.Sprintf("%s/sleep?level=%d", baseURL(profile), SleepLevelValue(profile))
 	start := time.Now()
-	err := postAdmin(ctx, spec, url)
+	err := postAdmin(ctx, spec, profile, url)
 	event := Event{Timestamp: time.Now().UTC(), Type: "profile_sleep", Profile: profile.Name, DurationSeconds: time.Since(start).Seconds()}
 	if err == nil {
 		err = waitSleepState(ctx, spec, profile, true)
@@ -1328,7 +1329,7 @@ func wakeProfile(ctx context.Context, spec Spec, profile Profile, events *eventW
 		return nil
 	}
 	start := time.Now()
-	err = postAdmin(ctx, spec, baseURL(profile)+"/wake_up")
+	err = postAdmin(ctx, spec, profile, baseURL(profile)+"/wake_up")
 	event := Event{Timestamp: time.Now().UTC(), Type: "profile_wake", Profile: profile.Name, DurationSeconds: time.Since(start).Seconds()}
 	if err == nil {
 		err = waitSleepState(ctx, spec, profile, false)
@@ -1454,12 +1455,13 @@ func parseSleepingText(data []byte) bool {
 	return text == "true" || text == `"true"` || strings.Contains(text, ":true")
 }
 
-func postAdmin(ctx context.Context, spec Spec, url string) error {
+func postAdmin(ctx context.Context, spec Spec, profile Profile, url string) error {
 	client := &http.Client{Timeout: time.Duration(spec.Safety.HTTPTimeoutSec) * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return err
 	}
+	openAIHTTPClient{profile: profile}.applyAuthHeader(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

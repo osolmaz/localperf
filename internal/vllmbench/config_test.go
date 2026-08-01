@@ -1063,6 +1063,10 @@ func TestExecuteAttestsConcreteBackendForEachWorkloadPoint(t *testing.T) {
 func TestExecuteHTTPProfiledCanaryControlsProfilerEndpoints(t *testing.T) {
 	var starts, stops atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer profiler-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		switch request.URL.Path {
 		case "/start_profile":
 			starts.Add(1)
@@ -1083,6 +1087,7 @@ func TestExecuteHTTPProfiledCanaryControlsProfilerEndpoints(t *testing.T) {
 	spec.Safety.WorkloadTimeoutSec = 5
 	spec.Safety.HTTPTimeoutSec = 2
 	spec.Profiles[0].EndpointBaseURL = server.URL
+	spec.Profiles[0].Env = map[string]string{"OPENAI_API_KEY": "profiler-secret"}
 	spec.Workloads = []Workload{testRandomWorkload("http-canary", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
 	spec.Workloads[0].LoadGenerator = LoadGeneratorHTTP
 	ApplyDefaults(&spec)
@@ -1094,6 +1099,45 @@ func TestExecuteHTTPProfiledCanaryControlsProfilerEndpoints(t *testing.T) {
 	}
 	if starts.Load() != 1 || stops.Load() != 1 {
 		t.Fatalf("profiler endpoint calls = start %d stop %d, want 1/1", starts.Load(), stops.Load())
+	}
+}
+
+func TestFailedBackendAttestationPersistsCanonicalArtifact(t *testing.T) {
+	spec := testSpec()
+	spec.Name = "failed-backend-attestation"
+	spec.OutputDir = t.TempDir()
+	spec.Safety.MinMemAvailableGiB = 0.1
+	spec.Safety.StartupTimeoutSec = 10
+	spec.Safety.WorkloadTimeoutSec = 10
+	spec.Safety.HTTPTimeoutSec = 2
+	configureFakeVLLM(t, &spec)
+	spec.Profiles[0].AttentionBackend = "flash_attn"
+	spec.Profiles[0].Env = map[string]string{"FAKE_PROFILE_NO_EVIDENCE": "1"}
+	spec.Workloads = []Workload{testRandomWorkload("short", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
+	appendTimestamp := false
+	spec.Runner.AppendTimestampToRun = &appendTimestamp
+	summary, err := Execute(context.Background(), spec, RunOptions{RunDir: filepath.Join(spec.OutputDir, "run")})
+	if err == nil || !strings.Contains(err.Error(), "backend attestation failed") {
+		t.Fatalf("Execute error = %v, want backend attestation failure", err)
+	}
+	if err := artifact.Check(summary.ArtifactPath); err != nil {
+		t.Fatalf("failed-run artifact check: %v", err)
+	}
+	db, err := sql.Open("sqlite", summary.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var status string
+	var failureEvents int
+	if err := db.QueryRow(`SELECT status FROM run LIMIT 1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'backend_attestation_failed'`).Scan(&failureEvents); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || failureEvents != 1 {
+		t.Fatalf("persisted failure status/events = %q/%d, want failed/1", status, failureEvents)
 	}
 }
 
@@ -3099,8 +3143,8 @@ func configureFakeVLLM(t *testing.T, spec *Spec) {
 		// The process is a command/runner fixture, not a kernel implementation.
 		// Explicit backend claims belong only in tests that provide execution
 		// evidence for attestation.
-		spec.Profiles[i].AttentionBackend = "auto"
-		spec.Profiles[i].MoEBackend = "auto"
+		spec.Profiles[i].AttentionBackend = ""
+		spec.Profiles[i].MoEBackend = ""
 		spec.Profiles[i].KVCacheDType = "auto"
 	}
 }
@@ -3190,11 +3234,13 @@ func runFakeServe(args []string) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/stop_profile", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintln(os.Stdout, "Name Self CPU Self CUDA")
-		fmt.Fprintln(os.Stdout, "void flash_fwd_kernel 1us 10us")
-		fmt.Fprintln(os.Stdout, "triton_fused_moe_kernel 1us 10us")
-		fmt.Fprintln(os.Stdout, "Self CUDA time total: 20us")
-		_ = os.Stdout.Sync()
+		if os.Getenv("FAKE_PROFILE_NO_EVIDENCE") != "1" {
+			fmt.Fprintln(os.Stdout, "Name Self CPU Self CUDA")
+			fmt.Fprintln(os.Stdout, "void flash_fwd_kernel 1us 10us")
+			fmt.Fprintln(os.Stdout, "triton_fused_moe_kernel 1us 10us")
+			fmt.Fprintln(os.Stdout, "Self CUDA time total: 20us")
+			_ = os.Stdout.Sync()
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	server = &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
