@@ -110,7 +110,8 @@ func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
 	suite, _ := LoadSuite("practical-64k")
 	deployment := testDeployment()
 	deployment.Runtime.Env = map[string]string{
-		"HF_TOKEN": "secret-token", "AWS_ACCESS_KEY_ID": "secret-key", "SSH_KEY": "secret-ssh", "VISIBLE": "yes",
+		"HF_TOKEN": "secret-token", "AWS_ACCESS_KEY_ID": "secret-key", "SSH_KEY": "secret-ssh",
+		"AUTH": "secret-auth", "PASS": "secret-pass", "VISIBLE": "yes",
 	}
 	compiled, err := Compile(suite, deployment, Selection{Cases: []string{"generate-empty"}, Concurrencies: []int{1}})
 	if err != nil {
@@ -129,8 +130,22 @@ func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "secret") || strings.Count(string(data), "redacted") != 3 || !strings.Contains(string(data), "yes") {
+	if strings.Contains(string(data), "secret") || strings.Count(string(data), "redacted") != 5 || !strings.Contains(string(data), "yes") {
 		t.Fatalf("unexpected redacted deployment: %s", data)
+	}
+}
+
+func TestSuiteProvenanceHashesPersistedRedactedExecution(t *testing.T) {
+	suite, _ := LoadSuite("practical-64k")
+	deployment := testDeployment()
+	deployment.Runtime.Env = map[string]string{"AUTH": "secret-auth"}
+	compiled, err := Compile(suite, deployment, Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := vllmbench.RedactedSpec(compiled.Spec)
+	if got := vllmbench.SpecProvenance(persisted); got != vllmbench.SpecProvenanceGenerated {
+		t.Fatalf("redacted execution provenance = %q, want generated", got)
 	}
 }
 
