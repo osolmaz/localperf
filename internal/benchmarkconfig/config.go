@@ -180,6 +180,7 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		Host: defaultString(deployment.Runtime.Host, "127.0.0.1"), Port: deployment.Runtime.Port,
 		EndpointBaseURL: deployment.Runtime.EndpointBaseURL, Managed: managed,
 		HealthPath:  defaultString(deployment.Runtime.HealthPath, vllmbench.DefaultHealthPath),
+		Env:         deployment.Runtime.Env,
 		MaxModelLen: maxContext, MaxNumSeqs: maxConcurrency,
 		MaxNumBatchedTokens:  deployment.Server.MaxNumBatchedTokens,
 		GPUMemoryUtilization: deployment.Server.GPUMemoryUtilization,
@@ -236,7 +237,7 @@ func WriteExecutionFiles(runDir string, compiled Compiled) error {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return err
 	}
-	plan := vllmbench.BuildPlan(compiled.Spec, runDir)
+	plan := vllmbench.BuildPlan(vllmbench.RedactedSpec(compiled.Spec), runDir)
 	files := []struct {
 		name  string
 		value any
@@ -254,7 +255,7 @@ func WriteExecutionFiles(runDir string, compiled Compiled) error {
 }
 
 func VerifyExecutionFiles(runDir string, compiled Compiled) error {
-	plan := vllmbench.BuildPlan(compiled.Spec, runDir)
+	plan := vllmbench.BuildPlan(vllmbench.RedactedSpec(compiled.Spec), runDir)
 	files := []struct {
 		name  string
 		value any
@@ -506,6 +507,9 @@ func validateDeployment(deployment Deployment) error {
 func rejectOwnedServerArgs(field string, args []string) error {
 	owned := []string{"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization", "--kv-cache-dtype", "--attention-backend", "--moe-backend", "--enable-prefix-caching", "--no-enable-prefix-caching", "--enable-sleep-mode", "--profiler-config", "--revision"}
 	for _, arg := range args {
+		if flag, ok := sensitiveArgumentFlag(arg); ok {
+			return fmt.Errorf("%s contains credential flag %s; credentials must be supplied through runtime.env", field, flag)
+		}
 		for _, flag := range owned {
 			if arg == flag || strings.HasPrefix(arg, flag+"=") {
 				return fmt.Errorf("%s contains %s; set the structured deployment field instead (suite-derived limits cannot be overridden; attestation cannot be overridden)", field, flag)
@@ -513,6 +517,19 @@ func rejectOwnedServerArgs(field string, args []string) error {
 		}
 	}
 	return nil
+}
+
+func sensitiveArgumentFlag(arg string) (string, bool) {
+	flag := strings.ToLower(strings.TrimSpace(arg))
+	if before, _, ok := strings.Cut(flag, "="); ok {
+		flag = before
+	}
+	switch flag {
+	case "--api-key", "--api_key", "--auth-token", "--auth_token", "--authorization", "--hf-token", "--hf_token", "--password", "--token":
+		return flag, true
+	default:
+		return "", false
+	}
 }
 
 func appendRevision(args []string, revision string) []string {

@@ -1,10 +1,12 @@
 package vllmbench
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestObserveBackendsRecordsRequestedAndObservedFallback(t *testing.T) {
@@ -28,6 +30,25 @@ Self CUDA time total: 40us
 	}
 	if observation.Observed["moe"] != "triton" {
 		t.Fatalf("backend observation = %+v", observation)
+	}
+}
+
+func TestWaitBackendObservationReadsDelayedProfilerOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.log")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		written <- os.WriteFile(path, []byte("Name Self CPU Self CUDA\nvoid flash_fwd_kernel 1us 10us\nSelf CUDA time total: 10us\n"), 0o644)
+	}()
+	observation := waitBackendObservation(context.Background(), Profile{AttentionBackend: "flash_attn"}, path, 0, "delayed canary", time.Second)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	if observation.Observed["attention"] != "flash_attn" {
+		t.Fatalf("delayed observation = %+v", observation)
 	}
 }
 

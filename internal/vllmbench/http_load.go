@@ -600,8 +600,10 @@ func (client openAIHTTPClient) applyAuthHeader(req *http.Request) {
 func (client openAIHTTPClient) bearerToken() string {
 	for _, value := range []string{
 		client.profile.Env["OPENAI_API_KEY"],
+		client.profile.Env["VLLM_API_KEY"],
 		client.profile.Env["HF_TOKEN"],
 		os.Getenv("OPENAI_API_KEY"),
+		os.Getenv("VLLM_API_KEY"),
 		os.Getenv("HF_TOKEN"),
 	} {
 		if token := normalizeBearerToken(value); token != "" {
