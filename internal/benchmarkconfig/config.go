@@ -158,6 +158,9 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 	if err := rejectOwnedServerArgs("server.speculative_decoding", deployment.Server.SpeculativeDecoding); err != nil {
 		return Compiled{}, err
 	}
+	if err := rejectCredentialArgs("client.extra_args", deployment.Client.ExtraArgs); err != nil {
+		return Compiled{}, err
+	}
 	profileName := deployment.Name
 	engine := vllmbench.EngineConfig{
 		Name: deployment.Runtime.Name, Type: deployment.Runtime.Type,
@@ -498,6 +501,9 @@ func validateDeployment(deployment Deployment) error {
 	if deployment.Safety.MinMemAvailableGiB <= 0 {
 		issues = append(issues, "safety.min_mem_available_gib must be positive")
 	}
+	if defaultString(deployment.Client.LoadGenerator, vllmbench.LoadGeneratorVLLMBench) == vllmbench.LoadGeneratorHTTP && (strings.TrimSpace(deployment.Client.Tokenizer) != "" || len(deployment.Client.ExtraArgs) > 0) {
+		issues = append(issues, "client.tokenizer and client.extra_args are unsupported with localperf_http")
+	}
 	if len(issues) > 0 {
 		return errors.New(strings.Join(issues, "\n"))
 	}
@@ -505,15 +511,24 @@ func validateDeployment(deployment Deployment) error {
 }
 
 func rejectOwnedServerArgs(field string, args []string) error {
+	if err := rejectCredentialArgs(field, args); err != nil {
+		return err
+	}
 	owned := []string{"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization", "--kv-cache-dtype", "--attention-backend", "--moe-backend", "--enable-prefix-caching", "--no-enable-prefix-caching", "--enable-sleep-mode", "--profiler-config", "--revision"}
 	for _, arg := range args {
-		if flag, ok := sensitiveArgumentFlag(arg); ok {
-			return fmt.Errorf("%s contains credential flag %s; credentials must be supplied through runtime.env", field, flag)
-		}
 		for _, flag := range owned {
 			if arg == flag || strings.HasPrefix(arg, flag+"=") {
 				return fmt.Errorf("%s contains %s; set the structured deployment field instead (suite-derived limits cannot be overridden; attestation cannot be overridden)", field, flag)
 			}
+		}
+	}
+	return nil
+}
+
+func rejectCredentialArgs(field string, args []string) error {
+	for _, arg := range args {
+		if flag, ok := sensitiveArgumentFlag(arg); ok {
+			return fmt.Errorf("%s contains credential flag %s; credentials must be supplied through runtime.env", field, flag)
 		}
 	}
 	return nil
