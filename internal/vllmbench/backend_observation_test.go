@@ -146,4 +146,8 @@ func TestProfilerBackendLineFindsRequestedAndKVBackends(t *testing.T) {
 	if kind, value := profilerBackendLine(Profile{}, "unrelated kernel"); kind != "" || value != "" {
 		t.Fatalf("unrelated profiler line = %q/%q", kind, value)
 	}
+	compound := Profile{AttentionBackend: "flashinfer", MoEBackend: "flashinfer_cutlass"}
+	if kind, value := profilerBackendLine(compound, "flashinfer cutlass fused kernel"); kind != "moe" || value != "flashinfer_cutlass" {
+		t.Fatalf("compound MoE profiler line = %q/%q", kind, value)
+	}
 }

@@ -197,9 +197,6 @@ func WarmupCommand(spec Spec, profile Profile, runDir string) CommandSpec {
 	if strings.TrimSpace(warmup.Endpoint) != "" {
 		args = append(args, "--endpoint", warmup.Endpoint)
 	}
-	if requiresBackendAttestation(profile) {
-		args = append(args, "--profile")
-	}
 	return CommandSpec{
 		Env:  mergeEnv(spec.Env, engine.Env, nil, false),
 		Args: args,

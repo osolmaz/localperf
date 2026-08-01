@@ -99,6 +99,8 @@ type runSession struct {
 	ladderRows             map[string]*ReportRow
 	ladderStops            map[string]adaptiveStop
 	reportedMaxConcurrency map[string]float64
+	attestedPoints         map[string]bool
+	fatalErr               error
 }
 
 func Execute(ctx context.Context, spec Spec, opts RunOptions) (RunSummary, error) {
@@ -182,6 +184,7 @@ func initRunSession(ctx context.Context, spec Spec, opts RunOptions) *runSession
 		ladderRows:             map[string]*ReportRow{},
 		ladderStops:            map[string]adaptiveStop{},
 		reportedMaxConcurrency: map[string]float64{},
+		attestedPoints:         map[string]bool{},
 	}
 }
 
@@ -285,6 +288,9 @@ func (session *runSession) runProfile(profile Profile) error {
 	}
 	session.recordReportedMaxConcurrency(profile, proc)
 	if session.runProfileWorkloads(profile, proc, runs) {
+		if session.fatalErr != nil {
+			return session.fatalErr
+		}
 		return nil
 	}
 	if err := session.sleepFinishedProfile(profile, proc); err != nil {
@@ -439,6 +445,10 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	if err := checkMemoryEvent(session.spec, session.events, "before_workload", planned.Profile.Name); err != nil {
 		return session.handleWorkloadError(profile, proc, runs, index, planned, "workload_skipped", err)
 	}
+	if err := session.attestBackendPoint(planned); err != nil {
+		session.failBackendAttestation(profile, proc, runs, index, planned, err)
+		return true
+	}
 	result, err := executeBench(session.ctx, session.spec, planned, session.runDir, session.events)
 	if err != nil {
 		session.stopLadder(planned, fmt.Sprintf("concurrency %d failed: %v", planned.Concurrency, err))
@@ -453,6 +463,35 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	session.updateLadder(planned, result)
 	session.writeArtifactSnapshot()
 	return false
+}
+
+func (session *runSession) failBackendAttestation(profile Profile, proc *serverProcess, runs []PlannedRun, index int, planned PlannedRun, err error) {
+	session.summary.FailedRuns++
+	remaining := len(runs) - index - 1
+	session.summary.SkippedRuns += remaining
+	session.events.Write(Event{
+		Timestamp: time.Now().UTC(), Type: "backend_attestation_failed", Profile: profile.Name,
+		Workload: planned.Workload.Name, Concurrency: planned.Concurrency, Repeat: planned.Repeat, Error: err.Error(),
+	})
+	markRunsSkipped(session.events, runs[index+1:], "stopped after backend attestation failed")
+	stopProcess(proc)
+	delete(session.processes, profile.Name)
+	session.fatalErr = fmt.Errorf("backend attestation failed for %s/%s c%d: %w", profile.Name, planned.Workload.Name, planned.Concurrency, err)
+}
+
+func (session *runSession) attestBackendPoint(planned PlannedRun) error {
+	if !requiresBackendAttestation(planned.Profile) {
+		return nil
+	}
+	key := fmt.Sprintf("%s/%s/c%d", planned.Profile.Name, planned.Workload.Name, planned.Concurrency)
+	if session.attestedPoints[key] {
+		return nil
+	}
+	if err := executeBackendCanary(session.ctx, session.spec, planned, session.runDir, session.events); err != nil {
+		return err
+	}
+	session.attestedPoints[key] = true
+	return nil
 }
 
 // skipPlannedRun records an adaptive skip: skipped is a first-class outcome
@@ -852,8 +891,6 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 	}
 	command := WarmupCommand(spec, profile, runDir)
 	logPath := filepath.Join(runDir, "logs", Slug(profile.Name)+"__warmup.log")
-	serverLogPath := filepath.Join(runDir, "logs", Slug(profile.Name)+".server.log")
-	serverLogStart := logFileOffset(serverLogPath)
 	result, err := executeCommand(ctx, command, logPath, time.Duration(spec.Safety.WorkloadTimeoutSec)*time.Second, spec.Safety.MinMemAvailableGiB, time.Duration(spec.Safety.PollIntervalMillis)*time.Millisecond)
 	event := Event{
 		Timestamp:       time.Now().UTC(),
@@ -880,13 +917,6 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 		return err
 	}
 	events.Write(event)
-	if requiresBackendAttestation(profile) {
-		observation, _ := observeBackendsSince(profile, serverLogPath, serverLogStart, "profiled warmup generation")
-		events.Write(Event{Timestamp: time.Now().UTC(), Type: "backend_observation", Profile: profile.Name, Details: mustJSON(observation)})
-		if err := validateBackendObservation(observation); err != nil {
-			return fmt.Errorf("backend attestation failed after profiled warmup for %s: %w", profile.Name, err)
-		}
-	}
 	return nil
 }
 
@@ -906,6 +936,87 @@ func validateParsedResult(path, label string, expectedRequests, expectedConcurre
 		return fmt.Errorf("%s result reported %d failed request(s)", label, failed)
 	}
 	return validateResultPoint(rows[0], label, expectedRequests, expectedConcurrency)
+}
+
+func executeBackendCanary(ctx context.Context, spec Spec, planned PlannedRun, runDir string, events *eventWriter) error {
+	canary := planned
+	pointName := fmt.Sprintf("%s__%s__c%d", Slug(planned.Profile.Name), Slug(planned.Workload.Name), planned.Concurrency)
+	canary.ResultFile = filepath.Join(runDir, "attestations", pointName+".json")
+	logPath := filepath.Join(runDir, "logs", pointName+"__backend-attestation.log")
+	command := LoadCommand(spec, canary)
+	usesHTTP := canary.Workload.LoadGenerator == LoadGeneratorHTTP
+	if !usesHTTP {
+		command.Args = append(command.Args, "--profile")
+	}
+	serverLogPath := filepath.Join(runDir, "logs", Slug(planned.Profile.Name)+".server.log")
+	serverLogStart := logFileOffset(serverLogPath)
+	event := Event{
+		Timestamp: time.Now().UTC(), Type: "backend_attestation_start", Profile: planned.Profile.Name,
+		Workload: planned.Workload.Name, Concurrency: planned.Concurrency,
+		Command: CommandSummary(command), Args: command.Args, ResultFile: canary.ResultFile, LogFile: logPath,
+	}
+	events.Write(event)
+	result, err := executeProfiledCanary(ctx, spec, canary, command, logPath, usesHTTP)
+	finish := event
+	finish.Timestamp = time.Now().UTC()
+	finish.Type = "backend_attestation_finish"
+	finish.DurationSeconds = result.Duration.Seconds()
+	finish.ExitCode = result.ExitCode
+	if err == nil {
+		err = validateBackendCanaryResult(canary)
+	}
+	observation, _ := observeBackendsSince(planned.Profile, serverLogPath, serverLogStart, fmt.Sprintf("%s c%d canary", planned.Workload.Name, planned.Concurrency))
+	events.Write(Event{
+		Timestamp: time.Now().UTC(), Type: "backend_observation", Profile: planned.Profile.Name,
+		Workload: planned.Workload.Name, Concurrency: planned.Concurrency, Details: mustJSON(observation),
+	})
+	if err == nil {
+		err = validateBackendObservation(observation)
+	}
+	if err != nil {
+		finish.Error = err.Error()
+		events.Write(finish)
+		return err
+	}
+	events.Write(finish)
+	return nil
+}
+
+func executeProfiledCanary(ctx context.Context, spec Spec, planned PlannedRun, command CommandSpec, logPath string, usesHTTP bool) (commandResult, error) {
+	if !usesHTTP {
+		return executeLoadCommand(ctx, spec, planned, command, logPath)
+	}
+	return executeHTTPProfiledCanary(ctx, spec, planned, command, logPath)
+}
+
+func executeHTTPProfiledCanary(ctx context.Context, spec Spec, planned PlannedRun, command CommandSpec, logPath string) (commandResult, error) {
+	if err := postAdmin(ctx, spec, baseURL(planned.Profile)+"/start_profile"); err != nil {
+		return commandResult{ExitCode: -1}, fmt.Errorf("start backend profiler: %w", err)
+	}
+	result, runErr := executeLoadCommand(ctx, spec, planned, command, logPath)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Duration(spec.Safety.HTTPTimeoutSec)*time.Second)
+	defer cancel()
+	if err := postAdmin(stopCtx, spec, baseURL(planned.Profile)+"/stop_profile"); err != nil {
+		runErr = errors.Join(runErr, fmt.Errorf("stop backend profiler: %w", err))
+	}
+	return result, runErr
+}
+
+func validateBackendCanaryResult(planned PlannedRun) error {
+	rows, err := parseResultFile(planned.ResultFile)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return errors.New("backend canary result did not contain a parseable row")
+	}
+	if err := validateParsedResult(planned.ResultFile, "backend canary", resolvedNumPrompts(planned.Workload, planned.Concurrency), planned.Concurrency); err != nil {
+		return err
+	}
+	if !resultMatchesShape(rows[0], planned.Workload) {
+		return errors.New("backend canary token shape did not match the planned workload")
+	}
+	return nil
 }
 
 func executeBench(ctx context.Context, spec Spec, planned PlannedRun, runDir string, events *eventWriter) (*ReportRow, error) {
