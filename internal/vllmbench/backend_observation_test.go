@@ -71,3 +71,49 @@ func TestObserveBackendsSinceExcludesStartupSelection(t *testing.T) {
 		t.Fatalf("attested after = %q", observation.AttestedAfter)
 	}
 }
+
+func TestValidateBackendObservationRejectsMissingAndFallbackExecution(t *testing.T) {
+	for name, observation := range map[string]backendObservation{
+		"missing": {
+			Requested: map[string]string{"attention": "flashinfer"},
+			Observed:  map[string]string{},
+		},
+		"fallback": {
+			Requested: map[string]string{"attention": "flashinfer"},
+			Observed:  map[string]string{"attention": "flash_attn"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateBackendObservation(observation); err == nil {
+				t.Fatal("backend attestation error = nil")
+			}
+		})
+	}
+}
+
+func TestValidateBackendObservationAcceptsAutoAndConcreteFP8(t *testing.T) {
+	observation := backendObservation{
+		Requested: map[string]string{"attention": "auto", "moe": "", "kv_cache": "fp8"},
+		Observed:  map[string]string{"attention": "flash_attn", "kv_cache": "fp8_e4m3"},
+	}
+	if err := validateBackendObservation(observation); err != nil {
+		t.Fatalf("backend attestation error = %v", err)
+	}
+}
+
+func TestPreserveInvalidResultRemovesPlannedImportPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(path, []byte(`{"completed":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	invalidPath := preserveInvalidResult(path)
+	if invalidPath != path+".invalid" {
+		t.Fatalf("invalid result path = %q", invalidPath)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("planned result remains importable: %v", err)
+	}
+	if _, err := os.Stat(invalidPath); err != nil {
+		t.Fatalf("preserved invalid result: %v", err)
+	}
+}

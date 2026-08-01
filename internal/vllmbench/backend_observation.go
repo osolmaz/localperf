@@ -2,6 +2,7 @@ package vllmbench
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -69,6 +70,40 @@ func serverLogOffset(proc *serverProcess) int64 {
 
 func backendRequestLabel(planned PlannedRun) string {
 	return fmt.Sprintf("%s c%d repeat %d", planned.Workload.Name, planned.Concurrency, planned.Repeat)
+}
+
+func validateBackendObservation(observation backendObservation) error {
+	var issues []string
+	for _, kind := range []string{"attention", "moe", "kv_cache"} {
+		requested := normalizeBackendName(observation.Requested[kind])
+		if requested == "" || requested == "auto" {
+			continue
+		}
+		observed := normalizeBackendName(observation.Observed[kind])
+		if observed == "" {
+			issues = append(issues, fmt.Sprintf("requested %s backend %q was not observed executing", kind, requested))
+			continue
+		}
+		if !backendNamesMatch(requested, observed) {
+			issues = append(issues, fmt.Sprintf("requested %s backend %q but observed %q executing", kind, requested, observed))
+		}
+	}
+	if len(issues) > 0 {
+		return errors.New(strings.Join(issues, "; "))
+	}
+	return nil
+}
+
+func normalizeBackendName(value string) string {
+	return strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(value)))
+}
+
+func backendNamesMatch(requested, observed string) bool {
+	if requested == observed {
+		return true
+	}
+	// fp8 lets the runtime choose the supported concrete fp8 encoding.
+	return requested == "fp8" && strings.HasPrefix(observed, "fp8_")
 }
 
 func observedBackendLine(line string) (string, string) {

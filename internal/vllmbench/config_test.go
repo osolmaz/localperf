@@ -1921,6 +1921,11 @@ func httpTestSpec(t *testing.T, host string, port int, name string, numPrompts, 
 	spec.Profiles[0].Port = port
 	spec.Profiles[0].Managed = false
 	spec.Profiles[0].EnableSleepMode = false
+	// This generic OpenAI test server exposes no kernel evidence. Do not make
+	// an explicit backend claim that the runner must attest.
+	spec.Profiles[0].AttentionBackend = "auto"
+	spec.Profiles[0].MoEBackend = "auto"
+	spec.Profiles[0].KVCacheDType = "auto"
 	spec.Workloads = []Workload{testRandomWorkload(name, []string{spec.Profiles[0].Name}, 64, 8, numPrompts, []int{concurrency})}
 	spec.Workloads[0].LoadGenerator = LoadGeneratorHTTP
 	ApplyDefaults(&spec)
@@ -2919,6 +2924,14 @@ func configureFakeVLLM(t *testing.T, spec *Spec) {
 	for i := range spec.Engines {
 		spec.Engines[i].Command = command
 		spec.Engines[i].BenchCommand = command
+	}
+	for i := range spec.Profiles {
+		// The process is a command/runner fixture, not a kernel implementation.
+		// Explicit backend claims belong only in tests that provide execution
+		// evidence for attestation.
+		spec.Profiles[i].AttentionBackend = "auto"
+		spec.Profiles[i].MoEBackend = "auto"
+		spec.Profiles[i].KVCacheDType = "auto"
 	}
 }
 
