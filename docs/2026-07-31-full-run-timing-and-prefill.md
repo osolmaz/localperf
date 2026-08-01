@@ -17,7 +17,7 @@ re-imported and rendered without running model inference again.
 
 ## Final desired result
 
-Running the `practical-c1-c6-64k` sweep produces four reportable points:
+Running the `practical-64k` suite produces four reportable points:
 
 - `generate-empty` at c1;
 - `generate-empty` at c6;
@@ -117,7 +117,7 @@ value from a generation workload must not overwrite it.
 
 When no dedicated prefill workload exists and the generation measurement has
 valid streamed evidence, use its effective prefill values to populate the
-Prefill columns. This is the path used by `practical-c1-c6-64k`.
+Prefill columns. This is the path used by `practical-64k`.
 
 ## Evidence and artifact requirements
 

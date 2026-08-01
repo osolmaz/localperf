@@ -85,7 +85,8 @@ Point every batch for the same model at the same destination:
 
 ```sh
 localperf bench run \
-  --spec batch.json \
+  --suite practical-64k \
+  --deployment deployment.json \
   --artifact runs/models/model.sqlite
 ```
 
@@ -93,7 +94,7 @@ LocalPerf validates an existing artifact in full before appending. A new run ID
 adds a run and its children. Re-running the same run directory replaces that
 run's rows rather than duplicating them.
 
-Use a new run directory when the spec, runtime, model revision, or material
+Use a new run directory when the suite, deployment, selection, runtime, model revision, or material
 server configuration changes. Append the new run to the same model artifact if
 it is still part of the same model report.
 
@@ -131,7 +132,8 @@ same run directory:
 
 ```sh
 localperf bench run \
-  --spec spec.json \
+  --suite practical-64k \
+  --deployment deployment.json \
   --run-dir runs/<previous-run-id> \
   --resume \
   --artifact runs/models/model.sqlite
@@ -153,7 +155,8 @@ Only `benchmark` workloads enter report and comparison queries. A diagnostic
 probe may preserve useful startup, endpoint, or kernel evidence, but it cannot
 become a benchmark by changing its label after execution.
 
-Artifacts record the request count resolved from `num_prompts` or `prompts_per_user`, and the checker verifies exact completed and failed request counts for each measurement.
+Artifacts record the request count from each explicit suite batch, and the
+checker verifies exact completed and failed request counts for every measurement.
 
 ## Core tables
 

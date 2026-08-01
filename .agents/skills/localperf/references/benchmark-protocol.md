@@ -36,68 +36,21 @@ Use the median or a declared aggregate across all valid repeats. Report the
 mean, spread, raw sample count, and failures as well. Never choose the fastest
 repeat after seeing the data.
 
-## Default sweep
+## Choose one suite
 
-The normal baseline has two families.
+Do not combine benchmark questions into an automatically generated grid.
 
-### Maximum-throughput reference
+- `practical-64k` measures generation from minimal and near-full 64k context
+  at c1 and c6. Each batch has exactly one request per concurrent slot and each
+  point has three repeats. It has 12 measurements total and no prefill-only,
+  throughput-reference, or stress cases.
+- `throughput-4k` measures the separate 4k aggregate-throughput question.
+- `context-ladder` measures dedicated prefill and decode across the regular
+  active-context ladder.
 
-This is a 4k-capacity profile with a shorter workload selected to seek high
-aggregate token throughput. It answers a capacity/throughput question. It does
-not establish active 4k performance.
-
-Keep this family visibly separate from practical active-context rows.
-
-### Practical active-context sweep
-
-Use active targets:
-
-```text
-4k, 8k, 16k, 32k, 64k
-```
-
-Use client concurrency:
-
-```text
-1, 4, 8, 16, 32
-```
-
-Run both phases per target:
-
-- prefill: nearly all input and 1 output token;
-- decode: long input and up to 1,024 output tokens.
-
-The generator uses:
-
-```text
-headroom = max(64, target / 64)
-prefill input = target - headroom
-prefill output = 1
-decode output = min(1024, target / 4)
-decode input = target - decode output - headroom
-```
-
-At 4k, the active decode shape is about 3,008 requested input tokens and 1,024
-output tokens. This is the correct practical 4k decode point. A 42-token prompt
-plus 1,024 output tokens is a short-context diagnostic even when the server can
-accept 4k or more.
-
-For each point, the request count is:
-
-```text
-prompts_per_user * concurrency
-```
-
-The generated default `prompts_per_user` is 2. Override it when the benchmark calls for a different number of requests per concurrent batch.
-
-Use at least three repeats for a comparison unless cost or run time makes that
-impractical. If fewer repeats are used, state the limitation. LocalPerf's
-planner default is one repeat, so set `--repeats` deliberately.
-
-## Practical c1/c6 64k sweep
-
-When the user requests `practical-c1-c6-64k`, follow
-[the fixed sweep definition](../../../../docs/2026-07-31-practical-c1-c6-64k.md). It replaces the default grid for that run. Set `prompts_per_user: 1`: c1 contains one request and c6 contains six requests, repeated three times. Do not add other context lengths, concurrency values, reference workloads, or prefill-only points.
+Every suite stores explicit `{concurrency, requests}` batches. Never infer or
+silently scale a request count. Use at least three repeats for a consequential
+comparison unless time or cost requires fewer, and state that limitation.
 
 ## Extension decision
 
@@ -116,8 +69,8 @@ Extend active context by powers of two when the server and model support it:
 128k, 256k, 512k, 1m
 ```
 
-Change one dimension at a time. Normal planning caps contexts of 128k or more at
-c4. Higher concurrency there is a separate stress experiment.
+Change one dimension at a time. Put extensions in a separate explicit suite;
+do not silently append them to a built-in suite.
 
 Stop with a recorded reason when:
 
@@ -129,8 +82,7 @@ Stop with a recorded reason when:
 - the server-reported context or KV limit is reached;
 - the operator imposed a documented cap.
 
-An adaptive skip applies only to that profile/workload ladder. Review other
-phases and contexts before declaring a global limit.
+Review other cases and contexts before declaring a global limit.
 
 ## Runtime and model provenance
 
