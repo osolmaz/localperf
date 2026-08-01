@@ -3,12 +3,17 @@ package vllmbench
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestObserveBackendsRecordsRequestedAndObservedFallback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "server.log")
-	data := []byte("INFO executed FLASH_ATTN attention kernel\nINFO dispatched triton kernel for MoE\nINFO allocated KV cache dtype fp8_e4m3 for request\n")
+	data := []byte(`Name                                      Self CPU %      Self CPU   CPU total %     CPU total  Self CUDA   Self CUDA %
+void flash_fwd_kernel                     1.0%            1us        1.0%            1us        10us        25%
+triton_fused_moe_kernel                   1.0%            1us        1.0%            1us        30us        75%
+Self CUDA time total: 40us
+`)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -21,26 +26,33 @@ func TestObserveBackendsRecordsRequestedAndObservedFallback(t *testing.T) {
 	if observation.Requested["attention"] != "flashinfer" || observation.Observed["attention"] != "flash_attn" {
 		t.Fatalf("attention observation = %+v", observation)
 	}
-	if observation.Observed["moe"] != "triton" || observation.Observed["kv_cache"] != "fp8_e4m3" {
+	if observation.Observed["moe"] != "triton" {
 		t.Fatalf("backend observation = %+v", observation)
 	}
 }
 
-func TestObservedBackendLineIgnoresConfigurationEcho(t *testing.T) {
-	if kind, value := observedBackendLine("args: --attention-backend flashinfer"); kind != "" || value != "" {
-		t.Fatalf("configuration echo reported as observation: %q %q", kind, value)
+func TestObserveBackendsIgnoresLogsOutsideProfilerTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.log")
+	data := []byte("args: --attention-backend flashinfer\nINFO executed flashinfer attention kernel\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	observation, ok := observeBackends(Profile{AttentionBackend: "flashinfer"}, path)
+	if ok || observation.Observed["attention"] != "" {
+		t.Fatalf("ordinary logs reported as profiler evidence: %+v", observation)
 	}
 }
 
-func TestObservedBackendLineIgnoresSelectionWithoutKernelEvidence(t *testing.T) {
-	for _, line := range []string{
-		"using flash_attn attention backend",
-		"request complete; selected triton backend for moe",
-		"kv cache dtype: fp8_e4m3",
-	} {
-		if kind, value := observedBackendLine(line); kind != "" || value != "" {
-			t.Fatalf("selection reported as execution evidence: %q => %q %q", line, kind, value)
-		}
+func TestObserveBackendsRequiresCompleteProfilerTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.log")
+	if err := os.WriteFile(path, []byte("Name Self CPU Self CUDA\nvoid flash_fwd_kernel 1us 10us\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if observation, ok := observeBackends(Profile{AttentionBackend: "flash_attn"}, path); ok || observation.Observed["attention"] != "flash_attn" {
+		t.Fatalf("incomplete table result = %+v ok=%t", observation, ok)
+	}
+	if observation, ok := observeBackends(Profile{AttentionBackend: "flash_attn"}, filepath.Join(t.TempDir(), "missing.log")); ok || len(observation.Observed) != 0 {
+		t.Fatalf("missing log result = %+v ok=%t", observation, ok)
 	}
 }
 
@@ -54,7 +66,7 @@ func TestObserveBackendsSinceExcludesStartupSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.WriteString("INFO dispatched triton MoE kernel while serving request\nINFO request complete\n"); err != nil {
+	if _, err := file.WriteString("Name Self CPU Self CUDA\ntriton_fused_moe_kernel 1us 10us\nSelf CUDA time total: 10us\n"); err != nil {
 		t.Fatal(err)
 	}
 	if err := file.Close(); err != nil {
@@ -91,29 +103,47 @@ func TestValidateBackendObservationRejectsMissingAndFallbackExecution(t *testing
 	}
 }
 
-func TestValidateBackendObservationAcceptsAutoAndConcreteFP8(t *testing.T) {
+func TestValidateBackendObservationAcceptsAutoAndMatchingEvidence(t *testing.T) {
 	observation := backendObservation{
-		Requested: map[string]string{"attention": "auto", "moe": "", "kv_cache": "fp8"},
-		Observed:  map[string]string{"attention": "flash_attn", "kv_cache": "fp8_e4m3"},
+		Requested: map[string]string{"attention": "auto", "moe": "cutlass", "kv_cache": "fp8"},
+		Observed:  map[string]string{"attention": "flash_attn", "moe": "cutlass"},
 	}
 	if err := validateBackendObservation(observation); err != nil {
 		t.Fatalf("backend attestation error = %v", err)
 	}
 }
 
-func TestPreserveInvalidResultRemovesPlannedImportPath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "result.json")
-	if err := os.WriteFile(path, []byte(`{"completed":1}`), 0o644); err != nil {
-		t.Fatal(err)
+func TestProfilerBackendSignatures(t *testing.T) {
+	for _, signature := range profilerBackendSignatures {
+		line := strings.Join(append(append([]string{}, signature.All...), signature.Any...), " ")
+		if len(signature.Any) > 1 {
+			line = strings.Join(signature.All, " ") + " " + signature.Any[0]
+		}
+		if !profilerLineMatchesBackend(signature.Kind, signature.Name, line) {
+			t.Errorf("signature %s/%s did not match %q", signature.Kind, signature.Name, line)
+		}
 	}
-	invalidPath := preserveInvalidResult(path)
-	if invalidPath != path+".invalid" {
-		t.Fatalf("invalid result path = %q", invalidPath)
+	if profilerLineMatchesBackend("attention", "auto", "flashinfer") {
+		t.Fatal("auto backend produced execution evidence")
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("planned result remains importable: %v", err)
+	if profilerLineMatchesBackend("attention", "custom_backend", "unrelated") {
+		t.Fatal("unrelated custom backend matched")
 	}
-	if _, err := os.Stat(invalidPath); err != nil {
-		t.Fatalf("preserved invalid result: %v", err)
+}
+
+func TestProfilerBackendLineFindsRequestedAndKVBackends(t *testing.T) {
+	profile := Profile{AttentionBackend: "flashinfer", MoEBackend: "cutlass", KVCacheDType: "fp8"}
+	for line, wantKind := range map[string]string{
+		"flashinfer batchprefillwithpagedkvcachekernel 1us": "attention",
+		"cutlass gemm kernel 1us":                           "moe",
+		"kv cache fp8_e4m3 kernel 1us":                      "kv_cache",
+	} {
+		kind, value := profilerBackendLine(profile, line)
+		if kind != wantKind || value == "" {
+			t.Errorf("profiler line %q = %q/%q, want %q", line, kind, value, wantKind)
+		}
+	}
+	if kind, value := profilerBackendLine(Profile{}, "unrelated kernel"); kind != "" || value != "" {
+		t.Fatalf("unrelated profiler line = %q/%q", kind, value)
 	}
 }

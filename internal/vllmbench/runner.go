@@ -99,7 +99,6 @@ type runSession struct {
 	ladderRows             map[string]*ReportRow
 	ladderStops            map[string]adaptiveStop
 	reportedMaxConcurrency map[string]float64
-	fatalErr               error
 }
 
 func Execute(ctx context.Context, spec Spec, opts RunOptions) (RunSummary, error) {
@@ -286,9 +285,6 @@ func (session *runSession) runProfile(profile Profile) error {
 	}
 	session.recordReportedMaxConcurrency(profile, proc)
 	if session.runProfileWorkloads(profile, proc, runs) {
-		if session.fatalErr != nil {
-			return session.fatalErr
-		}
 		return nil
 	}
 	if err := session.sleepFinishedProfile(profile, proc); err != nil {
@@ -443,18 +439,12 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	if err := checkMemoryEvent(session.spec, session.events, "before_workload", planned.Profile.Name); err != nil {
 		return session.handleWorkloadError(profile, proc, runs, index, planned, "workload_skipped", err)
 	}
-	backendLogStart := serverLogOffset(proc)
 	result, err := executeBench(session.ctx, session.spec, planned, session.runDir, session.events)
 	if err != nil {
 		session.stopLadder(planned, fmt.Sprintf("concurrency %d failed: %v", planned.Concurrency, err))
 		aborted := session.handleWorkloadError(profile, proc, runs, index, planned, "workload_failed", err)
 		session.writeArtifactSnapshot()
 		return aborted
-	}
-	if err := session.recordBackendObservation(planned, proc, backendLogStart); err != nil {
-		session.invalidateBackendRun(profile, proc, runs, index, planned, err)
-		session.writeArtifactSnapshot()
-		return true
 	}
 	session.summary.CompletedRuns++
 	if result != nil {
@@ -463,56 +453,6 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	session.updateLadder(planned, result)
 	session.writeArtifactSnapshot()
 	return false
-}
-
-func (session *runSession) recordBackendObservation(planned PlannedRun, proc *serverProcess, logStart int64) error {
-	logPath := ""
-	if proc != nil {
-		logPath = proc.logPath
-	}
-	observation, _ := observeBackendsSince(planned.Profile, logPath, logStart, backendRequestLabel(planned))
-	if err := validateBackendObservation(observation); err != nil {
-		session.writeBackendObservation(planned, observation)
-		return err
-	}
-	session.writeBackendObservation(planned, observation)
-	return nil
-}
-
-func (session *runSession) writeBackendObservation(planned PlannedRun, observation backendObservation) {
-	session.events.Write(Event{
-		Timestamp: time.Now().UTC(), Type: "backend_observation",
-		Profile: planned.Profile.Name, Workload: planned.Workload.Name, Concurrency: planned.Concurrency,
-		Repeat: planned.Repeat, Details: mustJSON(observation),
-	})
-}
-
-func (session *runSession) invalidateBackendRun(profile Profile, proc *serverProcess, runs []PlannedRun, index int, planned PlannedRun, err error) {
-	session.summary.FailedRuns++
-	remaining := len(runs) - index - 1
-	session.summary.SkippedRuns += remaining
-	invalidPath := preserveInvalidResult(planned.ResultFile)
-	session.events.Write(Event{
-		Timestamp: time.Now().UTC(), Type: "workload_invalid", Profile: profile.Name,
-		Workload: planned.Workload.Name, Concurrency: planned.Concurrency, Repeat: planned.Repeat,
-		ResultFile: invalidPath, Error: err.Error(),
-	})
-	markRunsSkipped(session.events, runs[index+1:], "stopped after backend attestation failed")
-	stopProcess(proc)
-	delete(session.processes, profile.Name)
-	session.fatalErr = fmt.Errorf("backend attestation failed for %s/%s c%d: %w", profile.Name, planned.Workload.Name, planned.Concurrency, err)
-}
-
-func preserveInvalidResult(path string) string {
-	invalidPath := path + ".invalid"
-	if err := os.Rename(path, invalidPath); err != nil {
-		// Never leave a fallback result at the planned import path. If it cannot
-		// be preserved beside the run, discard that derived file; the command
-		// log and invalidation event remain as evidence.
-		_ = os.Remove(path)
-		return ""
-	}
-	return invalidPath
 }
 
 // skipPlannedRun records an adaptive skip: skipped is a first-class outcome
@@ -912,6 +852,8 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 	}
 	command := WarmupCommand(spec, profile, runDir)
 	logPath := filepath.Join(runDir, "logs", Slug(profile.Name)+"__warmup.log")
+	serverLogPath := filepath.Join(runDir, "logs", Slug(profile.Name)+".server.log")
+	serverLogStart := logFileOffset(serverLogPath)
 	result, err := executeCommand(ctx, command, logPath, time.Duration(spec.Safety.WorkloadTimeoutSec)*time.Second, spec.Safety.MinMemAvailableGiB, time.Duration(spec.Safety.PollIntervalMillis)*time.Millisecond)
 	event := Event{
 		Timestamp:       time.Now().UTC(),
@@ -938,6 +880,13 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 		return err
 	}
 	events.Write(event)
+	if requiresBackendAttestation(profile) {
+		observation, _ := observeBackendsSince(profile, serverLogPath, serverLogStart, "profiled warmup generation")
+		events.Write(Event{Timestamp: time.Now().UTC(), Type: "backend_observation", Profile: profile.Name, Details: mustJSON(observation)})
+		if err := validateBackendObservation(observation); err != nil {
+			return fmt.Errorf("backend attestation failed after profiled warmup for %s: %w", profile.Name, err)
+		}
+	}
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package vllmbench
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -48,6 +49,9 @@ func ServeCommand(spec Spec, profile Profile) CommandSpec {
 	appendStringArg("--kv-cache-dtype", profile.KVCacheDType)
 	appendStringArg("--attention-backend", profile.AttentionBackend)
 	appendStringArg("--moe-backend", profile.MoEBackend)
+	if requiresBackendAttestation(profile) {
+		args = append(args, "--profiler-config", backendProfilerConfig(profile))
+	}
 	if profile.EnableSleepMode {
 		args = append(args, "--enable-sleep-mode")
 	}
@@ -193,10 +197,29 @@ func WarmupCommand(spec Spec, profile Profile, runDir string) CommandSpec {
 	if strings.TrimSpace(warmup.Endpoint) != "" {
 		args = append(args, "--endpoint", warmup.Endpoint)
 	}
+	if requiresBackendAttestation(profile) {
+		args = append(args, "--profile")
+	}
 	return CommandSpec{
 		Env:  mergeEnv(spec.Env, engine.Env, nil, false),
 		Args: args,
 	}
+}
+
+func backendProfilerConfig(profile Profile) string {
+	config := map[string]any{
+		"profiler":                            "torch",
+		"torch_profiler_dir":                  "/tmp/localperf-backend-attestation-" + Slug(profile.Name),
+		"torch_profiler_with_stack":           false,
+		"torch_profiler_with_flops":           false,
+		"torch_profiler_use_gzip":             true,
+		"torch_profiler_dump_cuda_time_total": true,
+		"torch_profiler_record_shapes":        false,
+		"torch_profiler_with_memory":          false,
+		"ignore_frontend":                     true,
+	}
+	data, _ := json.Marshal(config)
+	return string(data)
 }
 
 func EngineForProfile(spec Spec, profile Profile) EngineConfig {

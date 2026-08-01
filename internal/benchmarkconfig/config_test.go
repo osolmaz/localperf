@@ -104,6 +104,11 @@ func TestSuiteDerivesServerLimitsAndRejectsOverrides(t *testing.T) {
 	if _, err := Compile(suite, deployment, Selection{}); err == nil || !strings.Contains(err.Error(), "suite-derived limits cannot be overridden") {
 		t.Fatalf("override error = %v", err)
 	}
+	deployment = testDeployment()
+	deployment.Server.SpeculativeDecoding = []string{"--gpu-memory-utilization=0.9"}
+	if _, err := Compile(suite, deployment, Selection{}); err == nil || !strings.Contains(err.Error(), "server.speculative_decoding contains --gpu-memory-utilization") {
+		t.Fatalf("speculative override error = %v", err)
+	}
 }
 
 func TestExecutionFilesAreWrittenAndSecretsAreRedacted(t *testing.T) {

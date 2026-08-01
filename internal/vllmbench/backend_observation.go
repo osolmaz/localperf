@@ -14,15 +14,16 @@ type backendObservation struct {
 	Observed      map[string]string `json:"observed,omitempty"`
 	Evidence      []string          `json:"evidence,omitempty"`
 	AttestedAfter string            `json:"attested_after_request"`
+	Source        string            `json:"source"`
 }
 
 func observeBackends(profile Profile, logPath string) (backendObservation, bool) {
 	return observeBackendsSince(profile, logPath, 0, "test request")
 }
 
-// observeBackendsSince reads only server output produced while handling a
-// validated generation request. Startup selections are deliberately excluded:
-// loading a backend is not evidence that its kernels executed for the model.
+// observeBackendsSince reads only the CUDA execution table emitted by the
+// request-scoped torch profiler. Startup selections and ordinary log messages
+// are deliberately excluded: loading a backend is not execution evidence.
 func observeBackendsSince(profile Profile, logPath string, offset int64, request string) (backendObservation, bool) {
 	observation := backendObservation{
 		Requested: map[string]string{
@@ -32,6 +33,7 @@ func observeBackendsSince(profile Profile, logPath string, offset int64, request
 		},
 		Observed:      map[string]string{},
 		AttestedAfter: request,
+		Source:        "torch_profiler_cuda_table",
 	}
 	file, err := os.Open(logPath)
 	if err != nil {
@@ -44,37 +46,49 @@ func observeBackendsSince(profile Profile, logPath string, offset int64, request
 	scanner := bufio.NewScanner(file)
 	buffer := make([]byte, 64*1024)
 	scanner.Buffer(buffer, 1024*1024)
+	completeCUDATable := scanProfilerTable(scanner, profile, &observation)
+	return observation, completeCUDATable && len(observation.Observed) > 0
+}
+
+func scanProfilerTable(scanner *bufio.Scanner, profile Profile, observation *backendObservation) bool {
+	inCUDATable := false
+	completeCUDATable := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		lower := strings.ToLower(line)
-		kind, value := observedBackendLine(lower)
+		if profilerTableHeader(lower) {
+			inCUDATable = true
+			continue
+		}
+		if inCUDATable && profilerTableFooter(lower) {
+			inCUDATable = false
+			completeCUDATable = true
+			continue
+		}
+		if !inCUDATable {
+			continue
+		}
+		kind, value := profilerBackendLine(profile, lower)
 		if kind == "" || observation.Observed[kind] != "" {
 			continue
 		}
 		observation.Observed[kind] = value
 		observation.Evidence = append(observation.Evidence, line)
 	}
-	return observation, len(observation.Observed) > 0
+	return completeCUDATable
 }
 
-func serverLogOffset(proc *serverProcess) int64 {
-	if proc == nil || strings.TrimSpace(proc.logPath) == "" {
-		return 0
-	}
-	info, err := os.Stat(proc.logPath)
+func logFileOffset(path string) int64 {
+	info, err := os.Stat(path)
 	if err != nil {
 		return 0
 	}
 	return info.Size()
 }
 
-func backendRequestLabel(planned PlannedRun) string {
-	return fmt.Sprintf("%s c%d repeat %d", planned.Workload.Name, planned.Concurrency, planned.Repeat)
-}
-
 func validateBackendObservation(observation backendObservation) error {
 	var issues []string
-	for _, kind := range []string{"attention", "moe", "kv_cache"} {
+	for _, kind := range []string{"attention", "moe"} {
 		requested := normalizeBackendName(observation.Requested[kind])
 		if requested == "" || requested == "auto" {
 			continue
@@ -94,6 +108,16 @@ func validateBackendObservation(observation backendObservation) error {
 	return nil
 }
 
+func requiresBackendAttestation(profile Profile) bool {
+	for _, requested := range []string{profile.AttentionBackend, profile.MoEBackend} {
+		normalized := normalizeBackendName(requested)
+		if normalized != "" && normalized != "auto" {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeBackendName(value string) string {
 	return strings.NewReplacer("-", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(value)))
 }
@@ -106,18 +130,30 @@ func backendNamesMatch(requested, observed string) bool {
 	return requested == "fp8" && strings.HasPrefix(observed, "fp8_")
 }
 
-func observedBackendLine(line string) (string, string) {
-	if strings.Contains(line, "attention") && backendExecutionLine(line) {
-		if value := knownBackend(line, attentionBackendNames); value != "" {
-			return "attention", value
-		}
+func profilerTableHeader(line string) bool {
+	return strings.Contains(line, "name") && (strings.Contains(line, "self cuda") || strings.Contains(line, "self gpu"))
+}
+
+func profilerTableFooter(line string) bool {
+	return strings.Contains(line, "self cuda time total") || strings.Contains(line, "self gpu time total")
+}
+
+func profilerBackendLine(profile Profile, line string) (string, string) {
+	requestedAttention := normalizeBackendName(profile.AttentionBackend)
+	if profilerLineMatchesBackend("attention", requestedAttention, line) {
+		return "attention", requestedAttention
 	}
-	if strings.Contains(line, "moe") && backendExecutionLine(line) {
-		if value := knownBackend(line, moeBackendNames); value != "" {
-			return "moe", value
-		}
+	if value := knownProfilerBackend("attention", line, attentionBackendNames); value != "" {
+		return "attention", value
 	}
-	if (strings.Contains(line, "kv cache dtype") || strings.Contains(line, "kv_cache_dtype")) && kvCacheExecutionLine(line) {
+	requestedMoE := normalizeBackendName(profile.MoEBackend)
+	if profilerLineMatchesBackend("moe", requestedMoE, line) {
+		return "moe", requestedMoE
+	}
+	if value := knownProfilerBackend("moe", line, moeBackendNames); value != "" {
+		return "moe", value
+	}
+	if strings.Contains(line, "kv") || strings.Contains(line, "cache") {
 		if value := knownBackend(line, kvCacheDTypeNames); value != "" {
 			return "kv_cache", value
 		}
@@ -125,21 +161,30 @@ func observedBackendLine(line string) (string, string) {
 	return "", ""
 }
 
-func backendExecutionLine(line string) bool {
-	if !strings.Contains(line, "kernel") {
-		return false
-	}
-	for _, marker := range []string{"dispatched ", "dispatching ", "executed ", "executing ", "launched ", "launching ", "ran ", "running "} {
-		if strings.Contains(line, marker) {
-			return true
+func knownProfilerBackend(kind, line string, names []backendName) string {
+	for _, candidate := range names {
+		if profilerLineMatchesBackend(kind, candidate.Name, line) {
+			return candidate.Name
 		}
 	}
-	return false
+	return ""
 }
 
-func kvCacheExecutionLine(line string) bool {
-	for _, marker := range []string{"allocated ", "allocating ", "cache block"} {
-		if strings.Contains(line, marker) {
+func profilerLineMatchesBackend(kind, backend, line string) bool {
+	if backend == "" || backend == "auto" {
+		return false
+	}
+	for _, signature := range profilerBackendSignatures {
+		if signature.Kind == kind && signature.Name == backend {
+			return signature.matches(line)
+		}
+	}
+	return strings.Contains(line, backend)
+}
+
+func containsAny(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
 			return true
 		}
 	}
@@ -151,12 +196,53 @@ type backendName struct {
 	Name   string
 }
 
+type profilerBackendSignature struct {
+	Kind string
+	Name string
+	All  []string
+	Any  []string
+	None []string
+}
+
+func (signature profilerBackendSignature) matches(line string) bool {
+	if !containsAll(line, signature.All...) || containsAny(line, signature.None...) {
+		return false
+	}
+	return len(signature.Any) == 0 || containsAny(line, signature.Any...)
+}
+
+func containsAll(value string, needles ...string) bool {
+	for _, needle := range needles {
+		if !strings.Contains(value, needle) {
+			return false
+		}
+	}
+	return true
+}
+
+var profilerBackendSignatures = []profilerBackendSignature{
+	{Kind: "attention", Name: "flashinfer", All: []string{"flashinfer"}, None: []string{"moe"}},
+	{Kind: "attention", Name: "flash_attn", Any: []string{"flash_attn", "flash attention", "flash_fwd", "flash::"}},
+	{Kind: "attention", Name: "xformers", All: []string{"xformers"}},
+	{Kind: "attention", Name: "triton", All: []string{"triton"}, Any: []string{"attention", "attn", "paged"}},
+	{Kind: "attention", Name: "triton_attn", All: []string{"triton"}, Any: []string{"attention", "attn", "paged"}},
+	{Kind: "attention", Name: "torch_sdpa", Any: []string{"torch_sdpa", "scaled_dot_product"}},
+	{Kind: "attention", Name: "flashmla", All: []string{"flashmla"}},
+	{Kind: "moe", Name: "flashinfer_cutlass", All: []string{"flashinfer", "cutlass"}},
+	{Kind: "moe", Name: "flashinfer_trtllm", All: []string{"flashinfer", "trtllm"}},
+	{Kind: "moe", Name: "deep_gemm", Any: []string{"deep_gemm", "deepgemm"}},
+	{Kind: "moe", Name: "triton", All: []string{"triton", "moe"}},
+	{Kind: "moe", Name: "cutlass", All: []string{"cutlass"}},
+	{Kind: "moe", Name: "marlin", All: []string{"marlin"}},
+	{Kind: "moe", Name: "pplx", All: []string{"pplx"}},
+}
+
 var attentionBackendNames = []backendName{
 	{"flashinfer", "flashinfer"},
 	{"flash_attn", "flash_attn"},
 	{"flash attention", "flash_attn"},
 	{"xformers", "xformers"},
-	{"triton", "triton"},
+	{"triton", "triton_attn"},
 	{"torch_sdpa", "torch_sdpa"},
 	{"flashmla", "flashmla"},
 }
