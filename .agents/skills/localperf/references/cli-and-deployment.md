@@ -92,9 +92,12 @@ structured server flags are refused.
 
 `model_revision`, runtime command/version, requested attention/MoE/KV
 backends, and speculative-decoding arguments are material provenance. Pin and
-review them before real GPU work. Requested settings are not backend
-attestation; preserve the observed server-log evidence and report fallbacks by
-their observed names.
+review them before real GPU work. A concrete attention or MoE backend enables a
+request-scoped torch-profiler probe during warmup. LocalPerf reads the emitted
+CUDA execution table before starting measured cases; missing or mismatched
+kernel evidence stops the run. The profiler is inactive during measurements.
+External endpoints must use `auto` rather than making a concrete backend claim
+that LocalPerf cannot attest from managed server evidence.
 
 ## Suite format
 

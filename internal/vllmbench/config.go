@@ -586,12 +586,30 @@ func ValidateSpec(spec Spec) error {
 	issues = append(issues, profileIssues...)
 	issues = append(issues, validateEndpointBaseURLProfileUsage(spec)...)
 	issues = append(issues, validateWarmup(spec.Warmup)...)
+	issues = append(issues, validateBackendAttestationSetup(spec)...)
 	issues = append(issues, validateWorkloads(spec.Workloads, profileNames, spec.Profiles)...)
 	issues = append(issues, validateGeneratorStamp(spec.Generator)...)
 	if len(issues) > 0 {
 		return errors.New(strings.Join(issues, "\n"))
 	}
 	return nil
+}
+
+func validateBackendAttestationSetup(spec Spec) []string {
+	var issues []string
+	for _, profile := range spec.Profiles {
+		if !requiresBackendAttestation(profile) {
+			continue
+		}
+		if !profile.Managed {
+			issues = append(issues, fmt.Sprintf("profile %q requests a concrete attention or MoE backend; profiler attestation requires a managed server", profile.Name))
+			continue
+		}
+		if !spec.Warmup.Enabled {
+			issues = append(issues, fmt.Sprintf("profile %q requests a concrete attention or MoE backend; warmup must be enabled for request-scoped profiler attestation", profile.Name))
+		}
+	}
+	return issues
 }
 
 // validateGeneratorStamp requires every declared ladder trim to carry its
@@ -1049,22 +1067,7 @@ func validateWorkloadDatasetName(prefix string, workload Workload) []string {
 
 func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	var issues []string
-	if workload.NumPrompts <= 0 && workload.PromptsPerUser <= 0 && len(workload.Batches) == 0 {
-		issues = append(issues, prefix+": num_prompts or prompts_per_user must be positive, or batches must be set")
-	}
-	countModes := 0
-	if workload.NumPrompts > 0 {
-		countModes++
-	}
-	if workload.PromptsPerUser > 0 {
-		countModes++
-	}
-	if len(workload.Batches) > 0 {
-		countModes++
-	}
-	if countModes > 1 {
-		issues = append(issues, prefix+": set exactly one of num_prompts, prompts_per_user, or batches, not both")
-	}
+	issues = append(issues, validateWorkloadCountMode(prefix, workload)...)
 	if workload.PromptsPerUser < 0 {
 		issues = append(issues, prefix+": prompts_per_user must not be negative")
 	}
@@ -1074,8 +1077,30 @@ func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	if len(workload.MaxConcurrency) == 0 {
 		issues = append(issues, prefix+": max_concurrency must not be empty")
 	}
+	issues = append(issues, validateWorkloadBatches(prefix, workload.Batches)...)
+	return issues
+}
+
+func validateWorkloadCountMode(prefix string, workload Workload) []string {
+	countModes := 0
+	for _, active := range []bool{workload.NumPrompts > 0, workload.PromptsPerUser > 0, len(workload.Batches) > 0} {
+		if active {
+			countModes++
+		}
+	}
+	if countModes == 0 {
+		return []string{prefix + ": num_prompts or prompts_per_user must be positive, or batches must be set"}
+	}
+	if countModes > 1 {
+		return []string{prefix + ": set exactly one of num_prompts, prompts_per_user, or batches, not both"}
+	}
+	return nil
+}
+
+func validateWorkloadBatches(prefix string, batches []Batch) []string {
+	var issues []string
 	seen := map[int]bool{}
-	for index, batch := range workload.Batches {
+	for index, batch := range batches {
 		if batch.Concurrency <= 0 || batch.Requests <= 0 {
 			issues = append(issues, fmt.Sprintf("%s: batches[%d] concurrency and requests must be positive", prefix, index))
 		}

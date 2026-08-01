@@ -102,6 +102,39 @@ func TestValidateSpecAllowsSmallBenchmarkSamples(t *testing.T) {
 	}
 }
 
+func TestValidateWorkloadPositiveFieldsCoversEveryCountMode(t *testing.T) {
+	valid := Workload{NumPrompts: 1, Repeats: 1, MaxConcurrency: []int{1}}
+	if issues := validateWorkloadPositiveFields("workload", valid); len(issues) != 0 {
+		t.Fatalf("valid workload issues = %v", issues)
+	}
+
+	missing := Workload{}
+	if issues := validateWorkloadPositiveFields("workload", missing); len(issues) != 3 {
+		t.Fatalf("missing workload issues = %v, want count/repeats/concurrency", issues)
+	}
+
+	mixed := valid
+	mixed.PromptsPerUser = 1
+	if issues := validateWorkloadPositiveFields("workload", mixed); len(issues) != 1 || !strings.Contains(issues[0], "exactly one") {
+		t.Fatalf("mixed count mode issues = %v", issues)
+	}
+
+	negative := valid
+	negative.PromptsPerUser = -1
+	if issues := validateWorkloadPositiveFields("workload", negative); len(issues) != 1 || !strings.Contains(issues[0], "must not be negative") {
+		t.Fatalf("negative prompts-per-user issues = %v", issues)
+	}
+
+	batched := Workload{
+		Batches:        []Batch{{Concurrency: 0, Requests: 0}, {Concurrency: 0, Requests: 1}},
+		Repeats:        1,
+		MaxConcurrency: []int{1},
+	}
+	if issues := validateWorkloadPositiveFields("workload", batched); len(issues) != 3 {
+		t.Fatalf("invalid batch issues = %v, want two invalid and one duplicate", issues)
+	}
+}
+
 func TestExecuteAllowsSmallBenchmarkSamples(t *testing.T) {
 	spec := testSpec()
 	spec.Workloads[0].NumPrompts = 1
@@ -344,6 +377,72 @@ func TestCommandsIncludeEngineEnv(t *testing.T) {
 		if _, ok := command.Env["PROFILE_ENV"]; ok {
 			t.Fatalf("%s env unexpectedly included profile env: %v", name, command.Env)
 		}
+	}
+}
+
+func TestServeCommandIncludesOptionalRuntimeControls(t *testing.T) {
+	spec := testSpec()
+	profile := spec.Profiles[0]
+	profile.KVCacheDType = "fp8"
+	profile.EnablePrefixCaching = boolPointer(true)
+	command := ShellQuote(ServeCommand(spec, profile).Args)
+	for _, want := range []string{
+		"--max-model-len 8192",
+		"--max-num-seqs 16",
+		"--max-num-batched-tokens 8192",
+		"--gpu-memory-utilization 0.35",
+		"--kv-cache-dtype fp8",
+		"--enable-sleep-mode",
+		"--enable-prefix-caching",
+	} {
+		if !strings.Contains(command, want) {
+			t.Errorf("serve command %q missing %q", command, want)
+		}
+	}
+
+	profile.MaxModelLen = 0
+	profile.MaxNumSeqs = 0
+	profile.MaxNumBatchedTokens = 0
+	profile.GPUMemoryUtilization = 0
+	profile.KVCacheDType = ""
+	profile.AttentionBackend = ""
+	profile.MoEBackend = ""
+	profile.EnableSleepMode = false
+	profile.EnablePrefixCaching = boolPointer(false)
+	command = ShellQuote(ServeCommand(spec, profile).Args)
+	if strings.Contains(command, "--max-model-len") || !strings.Contains(command, "--no-enable-prefix-caching") {
+		t.Fatalf("minimal serve command = %q", command)
+	}
+}
+
+func TestConcreteBackendCommandsUseProfiledWarmupAttestation(t *testing.T) {
+	spec := testSpec()
+	spec.Warmup.Enabled = true
+	spec.Profiles[0].AttentionBackend = "TRITON_ATTN"
+	spec.Profiles[0].MoEBackend = "cutlass"
+	serve := ShellQuote(ServeCommand(spec, spec.Profiles[0]).Args)
+	warmup := ShellQuote(WarmupCommand(spec, spec.Profiles[0], t.TempDir()).Args)
+	for _, want := range []string{"--profiler-config", `"profiler":"torch"`, `"torch_profiler_dump_cuda_time_total":true`} {
+		if !strings.Contains(serve, want) {
+			t.Fatalf("serve command %q missing %q", serve, want)
+		}
+	}
+	if !strings.Contains(warmup, "--profile") {
+		t.Fatalf("warmup command %q does not start request-scoped profiling", warmup)
+	}
+}
+
+func TestConcreteBackendRequiresWarmupAttestation(t *testing.T) {
+	spec := testSpec()
+	spec.Warmup.Enabled = false
+	spec.Profiles[0].AttentionBackend = "flashinfer"
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "warmup must be enabled") {
+		t.Fatalf("backend attestation setup error = %v", err)
+	}
+	spec.Warmup.Enabled = true
+	spec.Profiles[0].Managed = false
+	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "requires a managed server") {
+		t.Fatalf("external backend attestation error = %v", err)
 	}
 }
 
@@ -703,6 +802,8 @@ func TestRequestSamplesForResultSkipsJSONL(t *testing.T) {
 
 func TestExecuteDryRunAndReport(t *testing.T) {
 	spec := testSpec()
+	spec.Profiles[0].AttentionBackend = "auto"
+	spec.Profiles[0].MoEBackend = "auto"
 	spec.OutputDir = t.TempDir()
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
@@ -925,6 +1026,35 @@ func TestExecuteWithFakeVLLMEndToEnd(t *testing.T) {
 		t.Fatalf("output throughput = %v, want 20", summary.Rows[0].OutputTokensPerSec)
 	}
 	assertSQLiteArtifact(t, summary.ArtifactPath)
+}
+
+func TestExecuteAttestsConcreteBackendFromProfiledWarmup(t *testing.T) {
+	spec := testSpec()
+	spec.Name = "fake-vllm-backend-attestation"
+	spec.OutputDir = t.TempDir()
+	spec.Safety.MinMemAvailableGiB = 0.1
+	spec.Safety.StartupTimeoutSec = 10
+	spec.Safety.WorkloadTimeoutSec = 10
+	spec.Safety.HTTPTimeoutSec = 2
+	spec.Warmup.Enabled = true
+	configureFakeVLLM(t, &spec)
+	spec.Profiles[0].AttentionBackend = "flash_attn"
+	spec.Profiles[0].MoEBackend = "triton"
+	appendTimestamp := false
+	spec.Runner.AppendTimestampToRun = &appendTimestamp
+	summary, err := Execute(context.Background(), spec, RunOptions{RunDir: filepath.Join(spec.OutputDir, "run")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := os.ReadFile(summary.EventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"backend_observation"`, `"attention":"flash_attn"`, `"moe":"triton"`} {
+		if !strings.Contains(string(events), want) {
+			t.Fatalf("events missing %q:\n%s", want, events)
+		}
+	}
 }
 
 func TestExecuteRepeatsUseDistinctLogsAndMeasurements(t *testing.T) {
@@ -2675,8 +2805,8 @@ func testSpec() Spec {
 				MaxNumSeqs:           16,
 				MaxNumBatchedTokens:  8192,
 				GPUMemoryUtilization: 0.35,
-				AttentionBackend:     "TRITON_ATTN",
-				MoEBackend:           "cutlass",
+				AttentionBackend:     "auto",
+				MoEBackend:           "auto",
 			},
 		},
 		Workloads: []Workload{
@@ -3016,6 +3146,17 @@ func runFakeServe(args []string) {
 			_ = server.Shutdown(ctx)
 		}()
 	})
+	mux.HandleFunc("/start_profile", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/stop_profile", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(os.Stdout, "Name Self CPU Self CUDA")
+		fmt.Fprintln(os.Stdout, "void flash_fwd_kernel 1us 10us")
+		fmt.Fprintln(os.Stdout, "triton_fused_moe_kernel 1us 10us")
+		fmt.Fprintln(os.Stdout, "Self CUDA time total: 20us")
+		_ = os.Stdout.Sync()
+		w.WriteHeader(http.StatusOK)
+	})
 	server = &http.Server{Addr: "127.0.0.1:" + port, Handler: mux}
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
@@ -3066,6 +3207,11 @@ func runFakeBench(args []string) {
 	if numPrompts <= 0 {
 		numPrompts = concurrency
 	}
+	if hasFlag(args, "--profile") {
+		if err := callFakeProfileEndpoint(args, "/start_profile"); err != nil {
+			os.Exit(1)
+		}
+	}
 	if startFile := os.Getenv("FAKE_BENCH_STARTED_FILE"); startFile != "" {
 		_ = os.MkdirAll(filepath.Dir(startFile), 0o755)
 		_ = os.WriteFile(startFile, []byte("1\n"), 0o644)
@@ -3106,7 +3252,39 @@ func runFakeBench(args []string) {
 	if err := os.WriteFile(resultPath, append(data, '\n'), 0o644); err != nil {
 		os.Exit(1)
 	}
+	if hasFlag(args, "--profile") {
+		if err := callFakeProfileEndpoint(args, "/stop_profile"); err != nil {
+			os.Exit(1)
+		}
+	}
 	os.Exit(0)
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name {
+			return true
+		}
+	}
+	return false
+}
+
+func callFakeProfileEndpoint(args []string, endpoint string) error {
+	host := flagValue(args, "--host")
+	port := flagValue(args, "--port")
+	req, err := http.NewRequest(http.MethodPost, "http://"+host+":"+port+endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("profile endpoint %s returned HTTP %d", endpoint, resp.StatusCode)
+	}
+	return nil
 }
 
 func flagValue(args []string, name string) string {

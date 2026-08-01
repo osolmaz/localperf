@@ -152,7 +152,10 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		return Compiled{}, err
 	}
 	maxContext, maxConcurrency := suiteLimits(cases)
-	if err := rejectOwnedRuntimeArgs(deployment.Runtime.Args); err != nil {
+	if err := rejectOwnedServerArgs("runtime.args", deployment.Runtime.Args); err != nil {
+		return Compiled{}, err
+	}
+	if err := rejectOwnedServerArgs("server.speculative_decoding", deployment.Server.SpeculativeDecoding); err != nil {
 		return Compiled{}, err
 	}
 	profileName := deployment.Name
@@ -497,12 +500,12 @@ func validateDeployment(deployment Deployment) error {
 	return nil
 }
 
-func rejectOwnedRuntimeArgs(args []string) error {
-	owned := []string{"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization", "--kv-cache-dtype", "--attention-backend", "--moe-backend", "--enable-prefix-caching", "--no-enable-prefix-caching", "--enable-sleep-mode"}
+func rejectOwnedServerArgs(field string, args []string) error {
+	owned := []string{"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization", "--kv-cache-dtype", "--attention-backend", "--moe-backend", "--enable-prefix-caching", "--no-enable-prefix-caching", "--enable-sleep-mode", "--profiler-config", "--revision"}
 	for _, arg := range args {
 		for _, flag := range owned {
 			if arg == flag || strings.HasPrefix(arg, flag+"=") {
-				return fmt.Errorf("runtime.args contains %s; set the deployment server field instead (suite-derived limits cannot be overridden)", flag)
+				return fmt.Errorf("%s contains %s; set the structured deployment field instead (suite-derived limits cannot be overridden; attestation cannot be overridden)", field, flag)
 			}
 		}
 	}
