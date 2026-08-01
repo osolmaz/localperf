@@ -598,7 +598,7 @@ func ValidateSpec(spec Spec) error {
 func validateBackendAttestationSetup(spec Spec) []string {
 	var issues []string
 	for _, profile := range spec.Profiles {
-		if !requiresBackendAttestation(profile) {
+		if !requestsConcreteBackend(profile) {
 			continue
 		}
 		if !profile.Managed {

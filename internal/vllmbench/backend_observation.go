@@ -88,6 +88,9 @@ func logFileOffset(path string) int64 {
 
 func validateBackendObservation(observation backendObservation) error {
 	var issues []string
+	if len(observation.Observed) == 0 {
+		issues = append(issues, "no recognized attention or MoE backend was observed executing")
+	}
 	for _, kind := range []string{"attention", "moe"} {
 		requested := normalizeBackendName(observation.Requested[kind])
 		if requested == "" || requested == "auto" {
@@ -109,6 +112,19 @@ func validateBackendObservation(observation backendObservation) error {
 }
 
 func requiresBackendAttestation(profile Profile) bool {
+	if !profile.Managed {
+		return false
+	}
+	for _, requested := range []string{profile.AttentionBackend, profile.MoEBackend} {
+		normalized := normalizeBackendName(requested)
+		if normalized != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func requestsConcreteBackend(profile Profile) bool {
 	for _, requested := range []string{profile.AttentionBackend, profile.MoEBackend} {
 		normalized := normalizeBackendName(requested)
 		if normalized != "" && normalized != "auto" {

@@ -113,6 +113,19 @@ func TestValidateBackendObservationAcceptsAutoAndMatchingEvidence(t *testing.T) 
 	}
 }
 
+func TestManagedAutoBackendRequiresObservation(t *testing.T) {
+	profile := Profile{Managed: true, AttentionBackend: "auto", MoEBackend: "auto"}
+	if !requiresBackendAttestation(profile) {
+		t.Fatal("managed auto backend did not require an observation canary")
+	}
+	if requiresBackendAttestation(Profile{Managed: false, AttentionBackend: "auto"}) {
+		t.Fatal("external auto backend incorrectly required inaccessible server evidence")
+	}
+	if err := validateBackendObservation(backendObservation{Requested: map[string]string{"attention": "auto"}, Observed: map[string]string{}}); err == nil {
+		t.Fatal("empty auto backend observation was accepted")
+	}
+}
+
 func TestProfilerBackendSignatures(t *testing.T) {
 	for _, signature := range profilerBackendSignatures {
 		line := strings.Join(append(append([]string{}, signature.All...), signature.Any...), " ")
