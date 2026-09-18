@@ -19,22 +19,23 @@ func nonceTestWorkload() Workload {
 }
 
 func TestPromptNoncePrefixIsUniquePerSend(t *testing.T) {
-	nonce := newPromptNonce("abcd1234")
+	nonce := newPromptNonce("abcd")
 	first, second := nonce.prefix(), nonce.prefix()
 	if first == second {
 		t.Fatalf("prefix %q repeated, want a unique stamp per send", first)
 	}
-	if !strings.HasPrefix(first, "[localperf nonce abcd1234 000001] ") {
-		t.Fatalf("prefix = %q, want the salt and a zero padded counter", first)
-	}
-	if !strings.HasPrefix(second, "[localperf nonce abcd1234 000002] ") {
-		t.Fatalf("second prefix = %q, want the next counter value", second)
+	if first != "[localperf abcd:1] " || second != "[localperf abcd:2] " {
+		t.Fatalf("prefixes = %q, %q, want the salt and an increasing counter", first, second)
 	}
 }
 
 func TestPromptNonceSaltIsRandom(t *testing.T) {
-	if randomPromptNonceSalt() == randomPromptNonceSalt() {
+	salt := randomPromptNonceSalt()
+	if salt == randomPromptNonceSalt() {
 		t.Fatal("two salts matched, want a per-run stamp that survives a warm server")
+	}
+	if len(salt) != 4 {
+		t.Fatalf("salt = %q, want a four character salt", salt)
 	}
 }
 
@@ -48,7 +49,7 @@ func TestStampPromptLeavesASharedSystemTurnAlone(t *testing.T) {
 	if stamped.Messages[0].Content != "system prompt" {
 		t.Fatalf("system turn = %q, want it untouched", stamped.Messages[0].Content)
 	}
-	if !strings.HasPrefix(stamped.Messages[1].Content, "[localperf nonce salt ") {
+	if !strings.HasPrefix(stamped.Messages[1].Content, "[localperf salt:") {
 		t.Fatalf("user turn = %q, want the nonce prefix", stamped.Messages[1].Content)
 	}
 	if !strings.HasSuffix(stamped.Messages[1].Content, " hello") {
@@ -62,7 +63,7 @@ func TestStampPromptLeavesASharedSystemTurnAlone(t *testing.T) {
 func TestStampPromptPrefixesCompletionPrompt(t *testing.T) {
 	client := openAIHTTPClient{nonce: newPromptNonce("salt")}
 	stamped := client.stampPrompt(CanonicalRequest{ID: "r1", Prompt: "hello"})
-	if !strings.HasPrefix(stamped.Prompt, "[localperf nonce salt ") || !strings.HasSuffix(stamped.Prompt, "hello") {
+	if !strings.HasPrefix(stamped.Prompt, "[localperf salt:") || !strings.HasSuffix(stamped.Prompt, "hello") {
 		t.Fatalf("prompt = %q, want the nonce prefix before the prompt", stamped.Prompt)
 	}
 }
@@ -70,7 +71,7 @@ func TestStampPromptPrefixesCompletionPrompt(t *testing.T) {
 func TestStampPromptFallsBackToFirstTurn(t *testing.T) {
 	client := openAIHTTPClient{nonce: newPromptNonce("salt")}
 	stamped := client.stampPrompt(CanonicalRequest{ID: "r1", Messages: []Message{{Role: "system", Content: "only"}}})
-	if !strings.HasPrefix(stamped.Messages[0].Content, "[localperf nonce salt ") {
+	if !strings.HasPrefix(stamped.Messages[0].Content, "[localperf salt:") {
 		t.Fatalf("message = %q, want the nonce prefix", stamped.Messages[0].Content)
 	}
 }
@@ -153,7 +154,7 @@ func TestInvokeStampsRepeatedRequests(t *testing.T) {
 		t.Fatalf("both requests arrived as %q, want distinct prompts", prompts[0])
 	}
 	for _, prompt := range prompts {
-		if !strings.Contains(prompt, "[localperf nonce salt ") || !strings.Contains(prompt, "same prompt") {
+		if !strings.Contains(prompt, "[localperf salt:") || !strings.Contains(prompt, "same prompt") {
 			t.Fatalf("prompt = %q, want the nonce stamp and the original text", prompt)
 		}
 	}
