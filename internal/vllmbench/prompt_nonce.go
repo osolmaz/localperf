@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -34,15 +35,17 @@ func promptNonceFor(workload Workload, salt string) *promptNonce {
 // randomPromptNonceSalt separates runs that reuse the same suite and prompts
 // against a server that stays up between them.
 func randomPromptNonceSalt() string {
-	buffer := make([]byte, 4)
+	buffer := make([]byte, 2)
 	if _, err := rand.Read(buffer); err != nil {
-		return "unseeded"
+		return "0"
 	}
 	return hex.EncodeToString(buffer)
 }
 
+// prefix stays short: a long stamp is charged against every case budget, and a
+// byte level tokenizer charges about one token per character.
 func (nonce *promptNonce) prefix() string {
-	return fmt.Sprintf("[localperf nonce %s %06d] ", nonce.salt, nonce.index.Add(1))
+	return fmt.Sprintf("[localperf %s:%s] ", nonce.salt, strconv.FormatInt(nonce.index.Add(1), 36))
 }
 
 // promptNonceEnabled defaults to true: a run must not silently measure a

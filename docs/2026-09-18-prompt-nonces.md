@@ -17,8 +17,9 @@ stamp makes each request a new prompt, so a cached prefix can never answer it.
 
 ## What the stamp is
 
-The stamp is a short prefix, `[localperf nonce <salt> <counter>] `, with a salt
-that changes per run and a counter that increases per send.
+The stamp is a short prefix, `[localperf <salt>:<counter>] `, with a salt that
+changes per run and a counter that increases per send. It costs about ten
+tokens, because a byte-level tokenizer charges about one token per character.
 
 - The prefix lands at the start of the first user turn, which is where a prefix
   cache would otherwise match. A shared system prompt stays untouched.
@@ -26,6 +27,8 @@ that changes per run and a counter that increases per send.
   and separate runs against a warm server both send new text.
 - The stamp costs about ten tokens. It stays inside the 90–100% active-context
   band, and the recorded `prompt_sha256` covers the stamped request.
+- The stamp counts against the case budget. A prompt sized exactly to the
+  server slot may now exceed it, and the server reports that plainly.
 - Requests that never reach the server keep the planned prompt hash.
 
 ## Turning it off
