@@ -45,6 +45,7 @@ type Case struct {
 	Repeats          int               `json:"repeats"`
 	Temperature      float64           `json:"temperature"`
 	IgnoreEOS        bool              `json:"ignore_eos"`
+	PromptNonce      *bool             `json:"prompt_nonce,omitempty"`
 }
 
 type Deployment struct {
@@ -373,6 +374,7 @@ func compileCases(cases []Case, profile string, client Client) []vllmbench.Workl
 			LoadGenerator: defaultString(client.LoadGenerator, vllmbench.LoadGeneratorVLLMBench),
 			Profiles:      []string{profile}, Batches: append([]vllmbench.Batch(nil), item.Batches...),
 			Repeats: item.Repeats, IgnoreEOS: item.IgnoreEOS, Temperature: &temperature,
+			PromptNonce: item.PromptNonce,
 		})
 	}
 	return workloads

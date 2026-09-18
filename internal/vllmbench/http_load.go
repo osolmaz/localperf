@@ -99,6 +99,7 @@ type openAIHTTPClient struct {
 	profile  Profile
 	workload Workload
 	client   *http.Client
+	nonce    *promptNonce
 }
 
 type openAIResponse struct {
@@ -234,6 +235,7 @@ func runHTTPBenchmark(ctx context.Context, planned PlannedRun) (*HTTPBenchmarkRe
 		profile:  planned.Profile,
 		workload: planned.Workload,
 		client:   &http.Client{},
+		nonce:    promptNonceFor(planned.Workload, randomPromptNonceSalt()),
 	}
 	start := time.Now().UTC()
 	samples, err := scheduleHTTPRequests(ctx, client, requests, planned)
@@ -434,6 +436,7 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 }
 
 func (client openAIHTTPClient) Invoke(ctx context.Context, index int, request CanonicalRequest) RequestSample {
+	request = client.stampPrompt(request)
 	sample := newRequestSample(index, request)
 	payload, endpoint, err := client.requestPayload(request)
 	if err != nil {

@@ -160,6 +160,28 @@ Workloads may also declare latency targets for goodput:
 The report then shows the fraction of requests meeting the target and goodput
 in requests per second.
 
+## Prompt Nonces
+
+Every request sent by the built-in HTTP client carries a unique prefix, so a
+repeated prompt cannot be answered from a server's prompt cache. Without it a
+replayed case reports a prefill rate that no cold request can reach.
+
+The prefix lands in the first user turn, so a shared system prompt stays intact.
+Both the salt and a per-send counter make the text new for every repeat and for
+separate runs against a server that stays up. The recorded `prompt_sha256`
+covers the stamped request, and the stamp costs about ten tokens, which stays
+inside the 90–100% active-context band.
+
+Turn it off on a case or a workload to measure prefix reuse on purpose:
+
+```json
+"prompt_nonce": false
+```
+
+The setting applies to `localperf_http`. Requests started by the external `vllm`
+load generator are outside LocalPerf's control. See
+[Prompt Nonces](docs/2026-09-18-prompt-nonces.md).
+
 ## Outputs
 
 Each run writes:
