@@ -200,6 +200,7 @@ type Workload struct {
 	Repeats                 int         `json:"repeats,omitempty"`
 	MaxConcurrency          []int       `json:"max_concurrency"`
 	Stream                  *bool       `json:"stream,omitempty"`
+	PromptNonce             *bool       `json:"prompt_nonce,omitempty"`
 	IgnoreEOS               bool        `json:"ignore_eos,omitempty"`
 	Temperature             *float64    `json:"temperature,omitempty"`
 	CapturePayloadArtifacts bool        `json:"capture_payload_artifacts,omitempty"`
