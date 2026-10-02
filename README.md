@@ -76,13 +76,13 @@ in its own tab.
 ## Suites
 
 localperf has three built-in suites. Each one fixes its cases, token shapes,
-request batches, and repeats, so two runs of the same suite measure the same
-thing.
+request batches, and convergence policy, so two runs of the same suite measure
+the same thing.
 
 | Suite | What it measures |
 | --- | --- |
-| `practical-64k` | Generation with an almost empty and an almost full 64k context, at 1 and 6 users, three repeats each. Every point reports decode and prefill speed. |
-| `throughput-4k` | Decode throughput at 4k active context with 1, 4, 8, 16, and 32 users, three repeats each. |
+| `practical-64k` | Generation with an almost empty and an almost full 64k context, at 1 and 6 users. Every point reports decode and prefill speed. |
+| `throughput-4k` | Decode throughput at 4k active context with 1, 4, 8, 16, and 32 users. |
 | `context-ladder` | Separate decode and prefill cases at 4k, 8k, 16k, 32k, 64k, and 128k active context, with the same user counts up to 64k and 1 and 4 users at 128k. |
 
 localperf sets the server's context size and slot count from the suite cases,
@@ -159,6 +159,16 @@ localperf artifact merge \
 A merge skips runs that are already in the target, and refuses a run whose ID
 matches an existing run with different provenance. The report lists every
 run and shows each repeated point as mean ± spread.
+
+### Convergence
+
+A point repeats until its throughput is known well enough. Every built-in case
+runs at least 3 and at most 10 samples, and stops when the 95% confidence
+interval of the mean is within ±5%, or when the next sample would end after
+600 seconds. The remaining planned samples are skipped with the reason, and
+the report shows the interval and the stop reason in the cell details. A point
+that stopped without converging gets a `*` marker. See
+[Adaptive convergence](docs/2026-10-02-adaptive-convergence.md).
 
 You can query an artifact directly:
 

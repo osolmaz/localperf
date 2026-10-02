@@ -513,7 +513,10 @@ INSERT INTO metric_stats (
 ```
 
 For token throughput variance, store one `measurements` row per repeat and
-calculate cross-repeat stats in reports. The report keeps effective prefill,
+calculate cross-repeat stats in reports. `workloads.repeats` stores the
+planned upper bound, `max_repeats`. A `point_stopped` event, linked to the last
+sample of its point, records each convergence decision, and `artifact check`
+recomputes it; see [Adaptive convergence](2026-10-02-adaptive-convergence.md). The report keeps effective prefill,
 TPOT-derived decode speed, and end-to-end output throughput separate.
 
 For streamed requests, `requests.first_token_at` stores the same observed

@@ -137,16 +137,25 @@ endpoint deployments warm up over HTTP.
 
 ## Suite format
 
-A custom suite is a strict version-1 document containing a name, explicit
+A custom suite is a strict version-2 document containing a name, explicit
 warmup, and named cases. Each case declares input/output tokens, context target
-and semantics, phase, role, repeats, deterministic sampling options, and exact
-batches:
+and semantics, phase, role, a convergence policy, deterministic sampling
+options, and exact batches:
 
 ```json
 "batches": [
   {"concurrency": 1, "requests": 1},
   {"concurrency": 6, "requests": 6}
 ]
+```
+
+The convergence policy replaces the old fixed `repeats` field, which no longer
+loads. A point repeats until the 95% interval of its throughput is within the
+target, or until it reaches `max_repeats` or `max_point_seconds`. A fixed count
+sets `min_repeats` equal to `max_repeats` and omits the target:
+
+```json
+"convergence": {"min_repeats": 3, "max_repeats": 10, "target_rel_half_width": 0.05, "max_point_seconds": 600}
 ```
 
 There is no implicit request scaling and no hidden reference or stress family.

@@ -114,6 +114,7 @@ type PhaseMetrics struct {
 	Err                int    `json:"err"`
 	FailureLabel       string `json:"failure_label,omitempty"`
 	FailureReason      string `json:"failure_reason,omitempty"`
+	ConvergenceNote    string `json:"convergence_note,omitempty"`
 	DetailURL          string `json:"detail_url,omitempty"`
 	Derived            bool   `json:"derived,omitempty"`
 	DerivedSource      string `json:"derived_source,omitempty"`
@@ -138,6 +139,7 @@ type CellDetail struct {
 	Concurrency      int            `json:"concurrency,omitempty"`
 	SamplesRequested int            `json:"samples_requested,omitempty"`
 	Shape            string         `json:"shape,omitempty"`
+	ConvergenceNote  string         `json:"convergence_note,omitempty"`
 	ProfileConfig    []MetadataItem `json:"profile_config,omitempty"`
 	Metrics          []MetadataItem `json:"metrics,omitempty"`
 	ServeCommand     string         `json:"serve_command,omitempty"`
@@ -415,6 +417,7 @@ func applyDerivedPrefillMetrics(target *ThroughputRow, source report.SQLiteRepor
 		Err:                source.FailedRequests,
 		FailureLabel:       source.FailureLabel,
 		FailureReason:      source.FailureReason,
+		ConvergenceNote:    source.Detail.ConvergenceNote,
 		DetailURL:          fmt.Sprintf("measurements/%d", source.MeasurementID),
 		Derived:            true,
 		DerivedSource:      "generation-derived from streamed TTFT",
@@ -457,6 +460,7 @@ func phaseMetrics(source report.SQLiteReportThroughputRow) PhaseMetrics {
 		Err:                source.FailedRequests,
 		FailureLabel:       source.FailureLabel,
 		FailureReason:      source.FailureReason,
+		ConvergenceNote:    source.Detail.ConvergenceNote,
 		DetailURL:          fmt.Sprintf("measurements/%d", source.MeasurementID),
 	}
 }
@@ -599,6 +603,7 @@ func cellDetail(detail report.SQLiteReportCellDetail) CellDetail {
 		Concurrency:      detail.Concurrency,
 		SamplesRequested: detail.SamplesRequested,
 		Shape:            detail.Shape,
+		ConvergenceNote:  detail.ConvergenceNote,
 		ProfileConfig:    metadataItems(detail.ProfileConfig),
 		Metrics:          metadataItems(detail.Metrics),
 		ServeCommand:     detail.ServeCommand,

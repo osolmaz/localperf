@@ -112,3 +112,4 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:now
   .phone-table-wrap,.secondary{display:none}
   .cell-detail>summary::after,.cell-popover{display:none}
 }
+.not-converged{color:var(--warn);margin-left:2px;font-weight:700;cursor:help}

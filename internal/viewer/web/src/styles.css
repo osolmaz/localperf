@@ -497,3 +497,10 @@ td:has(.metric-trigger) {
     font-size: 11px;
   }
 }
+
+.not-converged {
+  color: var(--warn);
+  margin-left: 2px;
+  font-weight: 700;
+  cursor: help;
+}
