@@ -2,7 +2,7 @@ go:
   coverage:
     threshold: 85
   targets:
-    - internal/vllmbench
+    - internal/runner
   exclude:
     - "**/*_test.go"
     - pattern: "examples/**"
@@ -36,9 +36,9 @@ go:
     max_score: 8
   mutation:
     targets:
-      - internal/vllmbench/config.go
-      - internal/vllmbench/report.go
-      - internal/vllmbench/sqlite_artifact.go
+      - internal/runner/config.go
+      - internal/runner/report.go
+      - internal/runner/sqlite_artifact.go
   dependency_boundaries:
     - from: cmd/localperf
       allow:
@@ -49,12 +49,12 @@ go:
         - internal/report
         - internal/collections
         - internal/benchmarkconfig
-        - internal/vllmbench
+        - internal/runner
         - internal/viewer
     - from: internal/benchmarkconfig
       allow:
         - internal/artifact
-        - internal/vllmbench
+        - internal/runner
     - from: internal/bench
       allow: []
     - from: internal/artifact
@@ -72,7 +72,7 @@ go:
         - internal/artifact
         - internal/report
         - internal/reportmodel
-    - from: internal/vllmbench
+    - from: internal/runner
       allow:
         - internal/artifact
         - internal/bench

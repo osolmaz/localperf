@@ -15,8 +15,8 @@ import (
 	"github.com/osolmaz/localperf/internal/benchmarkconfig"
 	"github.com/osolmaz/localperf/internal/collections"
 	"github.com/osolmaz/localperf/internal/report"
+	"github.com/osolmaz/localperf/internal/runner"
 	"github.com/osolmaz/localperf/internal/viewer"
-	"github.com/osolmaz/localperf/internal/vllmbench"
 )
 
 type commandHandlers map[string]func([]string)
@@ -116,7 +116,7 @@ func runBench(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	dir := vllmbench.RunDir(*runDir, compiled.Spec, time.Now())
+	dir := runner.RunDir(*runDir, compiled.Spec, time.Now())
 	if *resume {
 		if err := benchmarkconfig.VerifyExecutionFiles(dir, compiled); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -135,7 +135,7 @@ func runBench(args []string) {
 		ctx, cancel = context.WithTimeout(ctx, *timeout)
 	}
 	defer cancel()
-	summary, err := vllmbench.Execute(ctx, compiled.Spec, vllmbench.RunOptions{
+	summary, err := runner.Execute(ctx, compiled.Spec, runner.RunOptions{
 		RunDir: dir, ArtifactPath: *artifactPath, DryRun: *dryRun, Resume: *resume,
 	})
 	fmt.Printf("run dir: %s\n", summary.RunDir)

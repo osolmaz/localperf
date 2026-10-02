@@ -60,7 +60,7 @@ tool generates its own prompts.
 
 ## Tests
 
-`internal/vllmbench/prompt_nonce_test.go` covers the prefix shape, the placement
+`internal/runner/prompt_nonce_test.go` covers the prefix shape, the placement
 in the first user turn, the completion prompt path, the disabled case, and one
 end-to-end send that proves two replay sends arrive as two prompts.
 `internal/benchmarkconfig/prompt_nonce_test.go` covers the suite and workload
