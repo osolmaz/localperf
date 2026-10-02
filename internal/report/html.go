@@ -1880,17 +1880,55 @@ func sqliteReportCellDetail(doc SQLiteReportDocument, measurement SQLiteReportMe
 		detail.MeasurementID = 0
 		detail.BenchmarkCommand = ""
 	}
-	detail.ProfileConfig = []SQLiteReportMetadataItem{
-		{Label: "Server limit", Value: displayContextWindow(profile.ContextWindow)},
-		{Label: "Max seqs", Value: displayPositiveInt(profile.MaxNumSeqs)},
-		{Label: "Batched tokens", Value: displayPositiveInt(profile.MaxNumBatchedTokens)},
-		{Label: "GPU memory", Value: dashIfEmpty(profile.GPUMemoryUtilizationS)},
-		{Label: "KV cache", Value: dashIfEmpty(profile.KVCacheDtype)},
-		{Label: "Prefix cache", Value: dashIfEmpty(profile.PrefixCaching)},
-		{Label: "Sleep", Value: fmt.Sprint(profile.EnableSleepMode)},
-	}
+	detail.ProfileConfig = profileConfigItems(profile, reportEngineType(doc.Engines, profile.Engine))
 	detail.Metrics = cellDetailMetrics(measurement)
 	return detail
+}
+
+// profileConfigItems shows the server settings of the profile's engine
+// family: llama-server slots and offload, or vLLM's batching, memory, and
+// sleep settings.
+func profileConfigItems(profile SQLiteReportProfile, engineType string) []SQLiteReportMetadataItem {
+	limit := SQLiteReportMetadataItem{Label: "Server limit", Value: displayContextWindow(profile.ContextWindow)}
+	kv := SQLiteReportMetadataItem{Label: "KV cache", Value: dashIfEmpty(profile.KVCacheDtype)}
+	prefix := SQLiteReportMetadataItem{Label: "Prefix cache", Value: dashIfEmpty(profile.PrefixCaching)}
+	if !strings.HasPrefix(engineType, "llama-cpp-") {
+		return []SQLiteReportMetadataItem{
+			limit,
+			{Label: "Max seqs", Value: displayPositiveInt(profile.MaxNumSeqs)},
+			{Label: "Batched tokens", Value: displayPositiveInt(profile.MaxNumBatchedTokens)},
+			{Label: "GPU memory", Value: dashIfEmpty(profile.GPUMemoryUtilizationS)},
+			kv, prefix,
+			{Label: "Sleep", Value: fmt.Sprint(profile.EnableSleepMode)},
+		}
+	}
+	var serve struct {
+		LlamaCpp struct {
+			GPULayers *int   `json:"gpu_layers"`
+			FlashAttn string `json:"flash_attn"`
+		} `json:"llama_cpp"`
+	}
+	_ = json.Unmarshal([]byte(profile.ServeJSON), &serve)
+	gpuLayers := ""
+	if serve.LlamaCpp.GPULayers != nil {
+		gpuLayers = fmt.Sprint(*serve.LlamaCpp.GPULayers)
+	}
+	return []SQLiteReportMetadataItem{
+		limit,
+		{Label: "Slots", Value: displayPositiveInt(profile.MaxNumSeqs)},
+		{Label: "GPU layers", Value: dashIfEmpty(gpuLayers)},
+		{Label: "Flash attn", Value: dashIfEmpty(serve.LlamaCpp.FlashAttn)},
+		kv, prefix,
+	}
+}
+
+func reportEngineType(engines []SQLiteReportEngine, id string) string {
+	for _, engine := range engines {
+		if engine.ID == id {
+			return engine.Type
+		}
+	}
+	return ""
 }
 
 // cellDetailMetrics carries the measurement's numbers into the detail view:

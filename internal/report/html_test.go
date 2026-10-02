@@ -1172,3 +1172,30 @@ func TestGeneratedSpecTrimsRenderAsRows(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileConfigFollowsTheEngineFamily(t *testing.T) {
+	layers := 99
+	serve, _ := json.Marshal(map[string]any{"llama_cpp": map[string]any{"gpu_layers": layers, "flash_attn": "on"}})
+	profile := SQLiteReportProfile{ContextWindow: 65536, MaxNumSeqs: 6, KVCacheDtype: "q8_0", PrefixCaching: "off", ServeJSON: string(serve)}
+	labels := func(items []SQLiteReportMetadataItem) map[string]string {
+		out := map[string]string{}
+		for _, item := range items {
+			out[item.Label] = item.Value
+		}
+		return out
+	}
+	llama := labels(profileConfigItems(profile, "llama-cpp-managed"))
+	if llama["Slots"] != "6" || llama["GPU layers"] != "99" || llama["Flash attn"] != "on" || llama["KV cache"] != "q8_0" {
+		t.Fatalf("llama.cpp config = %v", llama)
+	}
+	if _, ok := llama["GPU memory"]; ok {
+		t.Fatalf("llama.cpp config shows a vLLM setting: %v", llama)
+	}
+	vllm := labels(profileConfigItems(profile, "vllm-managed"))
+	if _, ok := vllm["Batched tokens"]; !ok || vllm["Max seqs"] != "6" {
+		t.Fatalf("vLLM config = %v", vllm)
+	}
+	if got := reportEngineType([]SQLiteReportEngine{{ID: "a", Type: "llama-cpp-endpoint"}}, "a"); got != "llama-cpp-endpoint" {
+		t.Fatalf("engine type = %q", got)
+	}
+}

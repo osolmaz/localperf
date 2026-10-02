@@ -491,7 +491,7 @@ function DetailBody({ detail, metric }: { detail: LoadState<CellDetail> | null; 
         </div>
       )}
       {(value.failure_reason || metric.failure_reason) && <CodeBlock label="Failure" value={value.failure_reason || metric.failure_reason || ""} />}
-      {value.serve_command && <CodeBlock label="vLLM serve" value={value.serve_command} />}
+      {value.serve_command && <CodeBlock label="Server command" value={value.serve_command} />}
       {value.benchmark_command && <CodeBlock label="Benchmark" value={value.benchmark_command} />}
       {value.engine_args && <CodeBlock label="Engine args" value={value.engine_args} />}
     </div>

@@ -140,7 +140,7 @@
 {{end}}
 </div>
 {{if .ProfileConfig}}<div class="detail-grid detail-config">{{range .ProfileConfig}}<span>{{.Label}}</span><strong>{{.Value}}</strong>{{end}}</div>{{end}}
-{{if .ServeCommand}}<div class="detail-command"><span>vLLM serve</span><code>{{.ServeCommand}}</code></div>{{end}}
+{{if .ServeCommand}}<div class="detail-command"><span>Server command</span><code>{{.ServeCommand}}</code></div>{{end}}
 {{if .BenchmarkCommand}}<div class="detail-command"><span>Benchmark</span><code>{{.BenchmarkCommand}}</code></div>{{end}}
 {{if .EngineArgs}}<div class="detail-command"><span>Engine args</span><code>{{.EngineArgs}}</code></div>{{end}}
 {{if .ServeJSON}}<div class="detail-command"><span>Serve JSON</span><code>{{.ServeJSON}}</code></div>{{end}}
