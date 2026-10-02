@@ -54,16 +54,21 @@ go:
     - from: internal/benchmarkconfig
       allow:
         - internal/artifact
+        - internal/convergence
         - internal/runner
     - from: internal/bench
       allow: []
     - from: internal/artifact
+      allow:
+        - internal/convergence
+    - from: internal/convergence
       allow: []
     - from: internal/report
       allow:
         - internal/artifact
         - internal/bench
         - internal/collections
+        - internal/convergence
     - from: internal/reportmodel
       allow:
         - internal/report
@@ -77,5 +82,6 @@ go:
         - internal/artifact
         - internal/bench
         - internal/collections
+        - internal/convergence
     - from: internal/collections
       allow: []
