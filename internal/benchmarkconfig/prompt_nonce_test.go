@@ -11,7 +11,7 @@ func TestCasePromptNonceReachesTheWorkload(t *testing.T) {
 		{Name: "default", Role: "decode", Phase: "decode", InputTokens: 64, OutputTokens: 8, Repeats: 1},
 		{Name: "shared", Role: "decode", Phase: "decode", InputTokens: 64, OutputTokens: 8, Repeats: 1, PromptNonce: &disabled},
 	}
-	workloads := compileCases(cases, "profile", Client{})
+	workloads := compileCases(cases, "profile", Deployment{})
 	if len(workloads) != 2 {
 		t.Fatalf("compiled %d workload(s), want 2", len(workloads))
 	}

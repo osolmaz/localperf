@@ -644,7 +644,7 @@ func startManagedProfile(ctx context.Context, spec Spec, runDir string, profile 
 type profilePrepareStep func(context.Context, Spec, string, Profile, *eventWriter, *serverProcess) error
 
 func profilePrepareSteps(shouldWarmup bool) []profilePrepareStep {
-	steps := []profilePrepareStep{waitReadyStep, wakeProfileStep}
+	steps := []profilePrepareStep{waitReadyStep, verifyServerLimitsStep, wakeProfileStep}
 	if shouldWarmup {
 		steps = append(steps, warmupProfileStep)
 	}
@@ -653,6 +653,10 @@ func profilePrepareSteps(shouldWarmup bool) []profilePrepareStep {
 
 func waitReadyStep(ctx context.Context, spec Spec, _ string, profile Profile, events *eventWriter, proc *serverProcess) error {
 	return waitReady(ctx, spec, profile, events, proc)
+}
+
+func verifyServerLimitsStep(ctx context.Context, spec Spec, _ string, profile Profile, events *eventWriter, _ *serverProcess) error {
+	return verifyServerLimits(ctx, spec, profile, events)
 }
 
 func wakeProfileStep(ctx context.Context, spec Spec, _ string, profile Profile, events *eventWriter, _ *serverProcess) error {
@@ -825,29 +829,38 @@ func (waiter *readinessWaiter) probeReady() bool {
 }
 
 // engineIdentity is the server's self-reported identity captured right after
-// readiness: /version (vLLM) and /v1/models (any OpenAI-compatible server,
-// including LM Studio and llama.cpp). It fills engines.version and
+// readiness: /props (llama.cpp build and model file), /version (vLLM), and
+// /v1/models (any OpenAI-compatible server). It fills engines.version and
 // engines.metadata_json so external engines are verified rather than
 // trusted.
 type engineIdentity struct {
 	Version string          `json:"version,omitempty"`
 	Models  json.RawMessage `json:"models,omitempty"`
+	Props   json.RawMessage `json:"props,omitempty"`
 }
 
 func probeEngineIdentity(ctx context.Context, client *http.Client, profile Profile) (engineIdentity, bool) {
 	identity := engineIdentity{}
 	if body, ok := fetchIdentityJSON(ctx, client, profile, baseURL(profile)+"/version"); ok {
-		var payload struct {
-			Version string `json:"version"`
-		}
-		if err := json.Unmarshal(body, &payload); err == nil {
-			identity.Version = payload.Version
-		}
+		identity.Version = jsonStringField(body, "version")
 	}
 	if body, ok := fetchIdentityJSON(ctx, client, profile, baseURL(profile)+"/v1/models"); ok {
 		identity.Models = body
 	}
-	return identity, identity.Version != "" || len(identity.Models) > 0
+	if body, ok := fetchIdentityJSON(ctx, client, profile, baseURL(profile)+"/props"); ok {
+		identity.Props = body
+		identity.Version = firstNonEmpty(identity.Version, jsonStringField(body, "build_info"))
+	}
+	return identity, identity.Version != "" || len(identity.Models) > 0 || len(identity.Props) > 0
+}
+
+func jsonStringField(body []byte, field string) string {
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	value, _ := payload[field].(string)
+	return value
 }
 
 const engineIdentityBodyLimit = 64 * 1024
@@ -890,9 +903,10 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 	if err := checkMemoryEvent(spec, events, "before_warmup", profile.Name); err != nil {
 		return err
 	}
-	command := WarmupCommand(spec, profile, runDir)
+	planned := warmupPlannedRun(spec, profile, runDir)
+	command := warmupLoadCommand(spec, planned, runDir)
 	logPath := filepath.Join(runDir, "logs", Slug(profile.Name)+"__warmup.log")
-	result, err := executeCommand(ctx, command, logPath, time.Duration(spec.Safety.WorkloadTimeoutSec)*time.Second, spec.Safety.MinMemAvailableGiB, time.Duration(spec.Safety.PollIntervalMillis)*time.Millisecond)
+	result, err := executeLoadCommand(ctx, spec, planned, command, logPath)
 	event := Event{
 		Timestamp:       time.Now().UTC(),
 		Type:            "warmup_finish",
@@ -919,6 +933,33 @@ func runWarmup(ctx context.Context, spec Spec, profile Profile, runDir string, e
 	}
 	events.Write(event)
 	return nil
+}
+
+// warmupPlannedRun describes the warmup as one diagnostic point so the same
+// load generators that measure the suite also warm the server.
+func warmupPlannedRun(spec Spec, profile Profile, runDir string) PlannedRun {
+	warmup := spec.Warmup
+	return PlannedRun{
+		Profile: profile,
+		Workload: Workload{
+			BenchmarkTrafficConfig: warmup.BenchmarkTrafficConfig,
+			Name:                   "warmup",
+			Role:                   WorkloadRoleDiagnostic,
+			LoadGenerator:          warmup.LoadGenerator,
+			NumPrompts:             warmup.NumPrompts,
+			MaxConcurrency:         []int{warmup.MaxConcurrency},
+			Repeats:                1,
+		},
+		Concurrency: warmup.MaxConcurrency,
+		ResultFile:  ResultPath(runDir, profile.Name, "warmup", warmup.MaxConcurrency),
+	}
+}
+
+func warmupLoadCommand(spec Spec, planned PlannedRun, runDir string) CommandSpec {
+	if planned.Workload.LoadGenerator == LoadGeneratorHTTP {
+		return httpCommand(spec, planned)
+	}
+	return WarmupCommand(spec, planned.Profile, runDir)
 }
 
 func validateWarmupResult(path string, expectedRequests, expectedConcurrency int) error {

@@ -150,7 +150,7 @@ func TestExecuteAllowsSmallBenchmarkSamples(t *testing.T) {
 
 func TestValidateSpecAllowsUnmanagedEndpointOnlyProfile(t *testing.T) {
 	spec := testSpec()
-	spec.Profiles[0].Managed = false
+	useEndpointEngine(&spec)
 	spec.Profiles[0].Port = 0
 	spec.Profiles[0].EndpointBaseURL = "https://api.example.com/v1"
 	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "all referenced workloads use localperf_http") {
@@ -158,7 +158,7 @@ func TestValidateSpecAllowsUnmanagedEndpointOnlyProfile(t *testing.T) {
 	}
 
 	withPort := testSpec()
-	withPort.Profiles[0].Managed = false
+	useEndpointEngine(&withPort)
 	withPort.Profiles[0].EndpointBaseURL = "https://api.example.com/v1"
 	if err := ValidateSpec(withPort); err == nil || !strings.Contains(err.Error(), "endpoint_base_url") {
 		t.Fatalf("ValidateSpec endpoint vllm_bench profile = %v, want endpoint_base_url issue", err)
@@ -181,6 +181,7 @@ func TestValidateSpecAllowsUnmanagedEndpointOnlyProfile(t *testing.T) {
 
 	spec.Warmup = WarmupConfig{
 		Enabled:        true,
+		LoadGenerator:  LoadGeneratorVLLMBench,
 		NumPrompts:     1,
 		MaxConcurrency: 1,
 		BenchmarkTrafficConfig: BenchmarkTrafficConfig{
@@ -438,7 +439,7 @@ func TestConcreteBackendRequiresManagedServerAttestation(t *testing.T) {
 	if err := ValidateSpec(spec); err != nil {
 		t.Fatalf("shape-specific attestation should not require generic warmup: %v", err)
 	}
-	spec.Profiles[0].Managed = false
+	useEndpointEngine(&spec)
 	if err := ValidateSpec(spec); err == nil || !strings.Contains(err.Error(), "requires a managed server") {
 		t.Fatalf("external backend attestation error = %v", err)
 	}
@@ -1453,7 +1454,7 @@ func TestSQLiteArtifactIgnoresStaleDatasetFiles(t *testing.T) {
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Profiles = spec.Profiles[:1]
-	spec.Profiles[0].Managed = false
+	useEndpointEngine(&spec)
 	spec.Profiles[0].Port = freeTestPort()
 	spec.Workloads = []Workload{testRandomWorkload("random", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
 
@@ -1565,7 +1566,7 @@ func TestExecuteWithShareGPTDatasetSkipsPayloadArtifactsByDefault(t *testing.T) 
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Profiles = spec.Profiles[:1]
-	spec.Profiles[0].Managed = false
+	useEndpointEngine(&spec)
 	spec.Workloads = []Workload{testShareGPTWorkload(datasetPath, []string{spec.Profiles[0].Name})}
 	ApplyDefaults(&spec)
 
@@ -1660,7 +1661,7 @@ func TestDryRunStoresDuplicateCustomRequestIDsAcrossWorkloads(t *testing.T) {
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	spec.Safety.MinMemAvailableGiB = 0.1
 	spec.Profiles = spec.Profiles[:1]
-	spec.Profiles[0].Managed = false
+	useEndpointEngine(&spec)
 	spec.Profiles[0].Port = freeTestPort()
 	spec.Workloads = []Workload{
 		testCustomJSONLWorkload("w1", datasetPath, []string{spec.Profiles[0].Name}),
@@ -2148,7 +2149,7 @@ func httpTestSpec(t *testing.T, host string, port int, name string, numPrompts, 
 	spec.Profiles = spec.Profiles[:1]
 	spec.Profiles[0].Host = host
 	spec.Profiles[0].Port = port
-	spec.Profiles[0].Managed = false
+	useEndpointEngine(&spec)
 	spec.Profiles[0].EnableSleepMode = false
 	// This generic OpenAI test server exposes no kernel evidence. Do not make
 	// an explicit backend claim that the runner must attest.
@@ -2922,14 +2923,23 @@ func testSpec() Spec {
 					RandomOutputLen: 16,
 					RequestRate:     "inf",
 				},
+				LoadGenerator:  LoadGeneratorVLLMBench,
 				PromptsPerUser: 2,
 				MaxConcurrency: []int{4, 8},
 				Temperature:    &temp,
 			},
 		},
 	}
+	spec.Warmup.LoadGenerator = LoadGeneratorVLLMBench
 	ApplyDefaults(&spec)
 	return spec
+}
+
+// useEndpointEngine points the vLLM test spec at a server that is already
+// running instead of one localperf starts.
+func useEndpointEngine(spec *Spec) {
+	spec.Engines[0].Type = EngineVLLMEndpoint
+	spec.Profiles[0].Managed = false
 }
 
 func fakeOpenAIServer(t *testing.T) (*httptest.Server, string, int) {
@@ -3030,6 +3040,7 @@ func testRandomWorkload(name string, profiles []string, inputLen, outputLen, num
 			RandomOutputLen: outputLen,
 			RequestRate:     "inf",
 		},
+		LoadGenerator:  LoadGeneratorVLLMBench,
 		NumPrompts:     numPrompts,
 		MaxConcurrency: concurrencies,
 	}
@@ -3191,6 +3202,8 @@ func TestHelperProcess(t *testing.T) {
 		runFakeServe(args[1:])
 	case "bench":
 		runFakeBench(args[1:])
+	case "--model":
+		runFakeLlamaServer(args)
 	default:
 		os.Exit(2)
 	}

@@ -301,7 +301,7 @@ func insertSpec(tx *sql.Tx, runID, kind string, data []byte, createdAt time.Time
 
 func insertEngines(tx *sql.Tx, runID string, spec Spec) error {
 	for _, engine := range spec.Engines {
-		managed := boolToInt(engine.Type == "vllm-managed")
+		managed := boolToInt(ManagedEngineType(engine.Type))
 		if engine.Managed != nil {
 			managed = boolToInt(*engine.Managed)
 		}
@@ -318,18 +318,7 @@ func insertEngines(tx *sql.Tx, runID string, spec Spec) error {
 
 func insertProfiles(tx *sql.Tx, runID string, spec Spec) error {
 	for _, profile := range spec.Profiles {
-		serveJSON := mustJSONString(map[string]any{
-			"max_model_len":          profile.MaxModelLen,
-			"max_num_seqs":           profile.MaxNumSeqs,
-			"max_num_batched_tokens": profile.MaxNumBatchedTokens,
-			"gpu_memory_utilization": profile.GPUMemoryUtilization,
-			"kv_cache_dtype":         profile.KVCacheDType,
-			"attention_backend":      profile.AttentionBackend,
-			"moe_backend":            profile.MoEBackend,
-			"enable_prefix_caching":  profile.EnablePrefixCaching,
-			"enable_sleep_mode":      profile.EnableSleepMode,
-			"sleep_level":            SleepLevelValue(profile),
-		})
+		serveJSON := mustJSONString(profileServeSettings(spec, profile))
 		if _, err := tx.Exec(`INSERT INTO profiles (
 			id, run_id, engine_id, name, model, host, port, endpoint_base_url,
 			managed, context_window, max_num_seqs, max_num_batched_tokens,
@@ -344,6 +333,41 @@ func insertProfiles(tx *sql.Tx, runID string, spec Spec) error {
 		}
 	}
 	return nil
+}
+
+// profileServeSettings records the server settings of the profile's engine
+// family; kv_cache_dtype is shared so reports read one KV column.
+func profileServeSettings(spec Spec, profile Profile) map[string]any {
+	settings := map[string]any{
+		"max_model_len":         profile.MaxModelLen,
+		"max_num_seqs":          profile.MaxNumSeqs,
+		"enable_prefix_caching": profile.EnablePrefixCaching,
+	}
+	if profileEngineFamily(spec, profile) == EngineFamilyLlamaCpp {
+		if profile.LlamaCpp != nil {
+			settings["llama_cpp"] = profile.LlamaCpp
+			settings["kv_cache_dtype"] = llamaCppKVCacheLabel(*profile.LlamaCpp)
+		}
+		return settings
+	}
+	settings["max_num_batched_tokens"] = profile.MaxNumBatchedTokens
+	settings["gpu_memory_utilization"] = profile.GPUMemoryUtilization
+	settings["kv_cache_dtype"] = profile.KVCacheDType
+	settings["attention_backend"] = profile.AttentionBackend
+	settings["moe_backend"] = profile.MoEBackend
+	settings["enable_sleep_mode"] = profile.EnableSleepMode
+	settings["sleep_level"] = SleepLevelValue(profile)
+	return settings
+}
+
+// llamaCppKVCacheLabel names the K and V cache types; one name when they
+// match, "k/v" when they differ, and "" when llama-server picks its default.
+func llamaCppKVCacheLabel(settings LlamaCppSettings) string {
+	k, v := strings.TrimSpace(settings.CacheTypeK), strings.TrimSpace(settings.CacheTypeV)
+	if k == v {
+		return k
+	}
+	return firstNonEmpty(k, "default") + "/" + firstNonEmpty(v, "default")
 }
 
 func insertWorkloads(tx *sql.Tx, runID string, spec Spec) error {
