@@ -13,7 +13,7 @@ import (
 // docs/2026-10-02-adaptive-convergence.md.
 
 // EventPointStopped records the stop decision of one point.
-const EventPointStopped = "point_stopped"
+const EventPointStopped = convergence.StopEventType
 
 type pointState struct {
 	values    []float64
@@ -21,27 +21,6 @@ type pointState struct {
 	p99TTFTs  []float64
 	decision  *convergence.Decision
 }
-
-// PointStoppedDetails is the payload of a point_stopped event. Values and
-// durations are the successful samples in repeat order, so the decision can
-// be recomputed from the event alone.
-type PointStoppedDetails struct {
-	Metric           string             `json:"metric"`
-	Reason           convergence.Reason `json:"reason"`
-	N                int                `json:"n"`
-	Mean             float64            `json:"mean"`
-	HalfWidth        float64            `json:"half_width"`
-	RelHalfWidth     float64            `json:"rel_half_width"`
-	IntervalKnown    bool               `json:"interval_known"`
-	Values           []float64          `json:"values"`
-	DurationsSeconds []float64          `json:"durations_seconds"`
-	Policy           convergence.Policy `json:"policy"`
-	Error            string             `json:"error,omitempty"`
-}
-
-// evaluatePoint is the stopping rule; tests replace it to get deterministic
-// decisions from a fake server with noisy timings.
-var evaluatePoint = convergence.Evaluate
 
 func pointKey(planned PlannedRun) string {
 	return fmt.Sprintf("%s\x00%s\x00%d", planned.Profile.Name, planned.Workload.Name, planned.Concurrency)
@@ -103,7 +82,7 @@ func (session *runSession) recordPointSample(planned PlannedRun, row *ReportRow)
 	state.values = append(state.values, value)
 	state.durations = append(state.durations, time.Duration(row.DurationSeconds*float64(time.Second)))
 	state.p99TTFTs = append(state.p99TTFTs, row.P99TTFTMillis)
-	decision := evaluatePoint(state.values, state.durations, planned.Workload.Convergence)
+	decision := convergence.Evaluate(state.values, state.durations, planned.Workload.Convergence)
 	if decision.Stop {
 		session.stopPoint(planned, state, decision, "")
 	}
@@ -121,10 +100,6 @@ func (session *runSession) recordPointFailure(planned PlannedRun, err error) {
 
 func (session *runSession) stopPoint(planned PlannedRun, state *pointState, decision convergence.Decision, reasonError string) {
 	state.decision = &decision
-	durations := make([]float64, len(state.durations))
-	for index, duration := range state.durations {
-		durations[index] = duration.Seconds()
-	}
 	session.events.Write(Event{
 		Timestamp:   time.Now().UTC(),
 		Type:        EventPointStopped,
@@ -132,12 +107,7 @@ func (session *runSession) stopPoint(planned PlannedRun, state *pointState, deci
 		Workload:    planned.Workload.Name,
 		Concurrency: planned.Concurrency,
 		Repeat:      planned.Repeat,
-		Details: mustJSON(PointStoppedDetails{
-			Metric: PointMetric(planned.Workload.Phase), Reason: decision.Reason, N: decision.N,
-			Mean: decision.Mean, HalfWidth: decision.HalfWidth, RelHalfWidth: decision.RelHalfWidth, IntervalKnown: decision.Known,
-			Values: append([]float64{}, state.values...), DurationsSeconds: durations,
-			Policy: planned.Workload.Convergence, Error: reasonError,
-		}),
+		Details:     mustJSON(convergence.NewStopRecord(PointMetric(planned.Workload.Phase), decision, state.values, state.durations, planned.Workload.Convergence, reasonError)),
 	})
 	if decision.Reason != convergence.ReasonFailed {
 		session.updateLadder(planned, state)

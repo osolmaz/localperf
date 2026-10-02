@@ -1,6 +1,7 @@
 package benchmarkconfig
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -372,5 +373,73 @@ func TestExampleDeploymentsCompile(t *testing.T) {
 		if _, err := Compile(suite, deployment, Selection{}); err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
+	}
+}
+
+func writeSuiteFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "suite.json")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+const convergenceSuiteCase = `{"name":"decode-4k","role":"benchmark","phase":"decode","input_tokens":3000,"output_tokens":1024,"context_target":4096,"context_semantics":"active","batches":[{"concurrency":1,"requests":1}],%s}`
+
+func TestLoadSuiteRequiresVersionTwoConvergence(t *testing.T) {
+	valid := `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":10,"target_rel_half_width":0.05,"max_point_seconds":600}`) + `]}`
+	suite, err := LoadSuite(writeSuiteFile(t, valid))
+	if err != nil {
+		t.Fatalf("LoadSuite(valid) = %v", err)
+	}
+	if suite.Cases[0].Convergence != DefaultConvergence {
+		t.Fatalf("convergence = %+v, want %+v", suite.Cases[0].Convergence, DefaultConvergence)
+	}
+	cases := map[string]string{
+		`version must be "2"`:              `{"version":"1","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":1,"max_repeats":1}`) + `]}`,
+		`unknown field "repeats"`:          `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"repeats":3`) + `]}`,
+		"min_repeats must be at least 1":   `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"temperature":0`) + `]}`,
+		"max_repeats must be at most 31":   `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":40,"target_rel_half_width":0.05}`) + `]}`,
+		"min_repeats equal to max_repeats": `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":10}`) + `]}`,
+	}
+	for want, body := range cases {
+		if _, err := LoadSuite(writeSuiteFile(t, body)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("LoadSuite error = %v, want %q", err, want)
+		}
+	}
+}
+
+func TestBuiltinSuitesUseDefaultConvergence(t *testing.T) {
+	for _, name := range BuiltinSuiteNames() {
+		suite, err := LoadSuite(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if suite.Version != SuiteVersion {
+			t.Fatalf("%s version = %q, want %q", name, suite.Version, SuiteVersion)
+		}
+		for _, item := range suite.Cases {
+			if item.Convergence != DefaultConvergence {
+				t.Fatalf("%s/%s convergence = %+v, want the default", name, item.Name, item.Convergence)
+			}
+		}
+	}
+	if err := DefaultConvergence.Validate("default"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompiledSpecRecordsSuiteVersion(t *testing.T) {
+	suite, _ := LoadSuite("practical-64k")
+	compiled, err := Compile(suite, testDeployment(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Spec.Version != Version {
+		t.Fatalf("runner spec version = %q, want %q", compiled.Spec.Version, Version)
+	}
+	if !strings.Contains(string(compiled.Spec.Generator.Intent), `"suite_version":"2"`) {
+		t.Fatalf("generator intent = %s, want suite_version 2", compiled.Spec.Generator.Intent)
 	}
 }

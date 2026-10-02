@@ -84,6 +84,14 @@ const (
 	ReasonFailed     Reason = "failed"
 )
 
+func (reason Reason) valid() bool {
+	switch reason {
+	case ReasonConverged, ReasonMaxRepeats, ReasonTimeBudget, ReasonFixed, ReasonFailed:
+		return true
+	}
+	return false
+}
+
 // Interval is the 95% confidence interval of a sample mean. Known is false
 // with fewer than two samples, where no interval exists.
 type Interval struct {
@@ -172,4 +180,80 @@ func overBudget(durations []time.Duration, policy Policy) bool {
 	}
 	next := elapsed / time.Duration(len(durations))
 	return (elapsed + next).Seconds() > policy.MaxPointSeconds
+}
+
+// StopEventType is the event type of a recorded stop decision.
+const StopEventType = "point_stopped"
+
+// StopRecord is the payload of a point_stopped event. Values and durations
+// are the successful samples in recording order, so the decision can be
+// recomputed from the record alone.
+type StopRecord struct {
+	Metric           string    `json:"metric"`
+	Reason           Reason    `json:"reason"`
+	N                int       `json:"n"`
+	Mean             float64   `json:"mean"`
+	HalfWidth        float64   `json:"half_width"`
+	RelHalfWidth     float64   `json:"rel_half_width"`
+	IntervalKnown    bool      `json:"interval_known"`
+	Values           []float64 `json:"values"`
+	DurationsSeconds []float64 `json:"durations_seconds"`
+	Policy           Policy    `json:"policy"`
+	Error            string    `json:"error,omitempty"`
+}
+
+// NewStopRecord builds the record of a decision over these samples.
+func NewStopRecord(metric string, decision Decision, values []float64, durations []time.Duration, policy Policy, errText string) StopRecord {
+	seconds := make([]float64, len(durations))
+	for index, duration := range durations {
+		seconds[index] = duration.Seconds()
+	}
+	return StopRecord{
+		Metric: metric, Reason: decision.Reason, N: decision.N,
+		Mean: decision.Mean, HalfWidth: decision.HalfWidth, RelHalfWidth: decision.RelHalfWidth, IntervalKnown: decision.Known,
+		Values: append([]float64{}, values...), DurationsSeconds: seconds, Policy: policy, Error: errText,
+	}
+}
+
+// Verify recomputes the decision from the record's samples and policy. The
+// recorded reason must be the one the rule gives at N samples, and no shorter
+// prefix of the samples may have stopped the point already.
+func (record StopRecord) Verify() error {
+	if !record.Reason.valid() {
+		return fmt.Errorf("recorded reason %q is not a stop reason", record.Reason)
+	}
+	if err := record.Policy.Validate("policy"); err != nil {
+		return err
+	}
+	if len(record.Values) != record.N || len(record.DurationsSeconds) != record.N {
+		return fmt.Errorf("n = %d with %d value(s) and %d duration(s)", record.N, len(record.Values), len(record.DurationsSeconds))
+	}
+	durations := make([]time.Duration, record.N)
+	for index, seconds := range record.DurationsSeconds {
+		durations[index] = time.Duration(seconds * float64(time.Second))
+	}
+	limit := record.N
+	if record.Reason != ReasonFailed {
+		limit = record.N - 1
+	}
+	for n := 0; n <= limit; n++ {
+		if n > 0 && Evaluate(record.Values[:n], durations[:n], record.Policy).Stop {
+			return fmt.Errorf("the rule already stopped the point at %d sample(s)", n)
+		}
+	}
+	want := Failed(record.Values)
+	if record.Reason != ReasonFailed {
+		want = Evaluate(record.Values, durations, record.Policy)
+		if !want.Stop || want.Reason != record.Reason {
+			return fmt.Errorf("recorded reason %q, recomputed %q at %d sample(s)", record.Reason, want.Reason, record.N)
+		}
+	}
+	if !nearlyEqual(want.Mean, record.Mean) || !nearlyEqual(want.HalfWidth, record.HalfWidth) || !nearlyEqual(want.RelHalfWidth, record.RelHalfWidth) || want.Known != record.IntervalKnown {
+		return fmt.Errorf("recorded interval %v ± %v, recomputed %v ± %v", record.Mean, record.HalfWidth, want.Mean, want.HalfWidth)
+	}
+	return nil
+}
+
+func nearlyEqual(a, b float64) bool {
+	return math.Abs(a-b) <= 1e-9*math.Max(1, math.Max(math.Abs(a), math.Abs(b)))
 }

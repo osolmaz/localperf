@@ -4,46 +4,65 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/osolmaz/localperf/internal/artifact"
 	"github.com/osolmaz/localperf/internal/convergence"
 )
 
-var wide = convergence.Policy{MinRepeats: 3, MaxRepeats: 6, TargetRelHalfWidth: 0.05}
+// wide converges at min_repeats on a steady fake server: the 95% half width
+// may reach 90% of the mean, far above the timing noise of a local server.
+var wide = convergence.Policy{MinRepeats: 3, MaxRepeats: 6, TargetRelHalfWidth: 0.9}
 
-// convergeAtMin makes every point converge at min_repeats, because fake
-// server timings are too noisy for a real interval. The real rule is covered
-// by the convergence package tests.
-func convergeAtMin(t *testing.T) {
+// steadyOpenAIServer answers every chat request after the same delay, so
+// sample throughput stays stable across repeats.
+func steadyOpenAIServer(t *testing.T) (*httptest.Server, string, int) {
 	t.Helper()
-	original := evaluatePoint
-	evaluatePoint = func(values []float64, durations []time.Duration, policy convergence.Policy) convergence.Decision {
-		decision := original(values, durations, policy)
-		if len(values) >= policy.MinRepeats && !policy.IsFixed() {
-			decision.Stop, decision.Reason = true, convergence.ReasonConverged
+	var calls atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		case "/v1/chat/completions":
+			call := calls.Add(1)
+			time.Sleep(40 * time.Millisecond)
+			if requestWantsStream(r) {
+				writeFakeSSEChatResponse(w, call, 64, 8, 72)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"id":"cmpl-%d","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":64,"completion_tokens":8,"total_tokens":72}}`, call)
+		default:
+			http.NotFound(w, r)
 		}
-		return decision
-	}
-	t.Cleanup(func() { evaluatePoint = original })
+	}))
+	host, port := testServerHostPort(t, server)
+	return server, host, port
 }
 
-func pointStoppedEvents(t *testing.T, db *sql.DB) []PointStoppedDetails {
+func pointStoppedEvents(t *testing.T, db *sql.DB) []convergence.StopRecord {
 	t.Helper()
 	rows, err := db.Query(`SELECT data_json FROM events WHERE type = ? ORDER BY id`, EventPointStopped)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var out []PointStoppedDetails
+	var out []convergence.StopRecord
 	for rows.Next() {
 		var raw string
 		if err := rows.Scan(&raw); err != nil {
 			t.Fatal(err)
 		}
-		var details PointStoppedDetails
+		var details convergence.StopRecord
 		if err := json.Unmarshal([]byte(raw), &details); err != nil {
 			t.Fatal(err)
 		}
@@ -71,8 +90,7 @@ func measurementStatuses(t *testing.T, db *sql.DB) []string {
 }
 
 func TestConvergedPointSkipsRemainingSamples(t *testing.T) {
-	convergeAtMin(t)
-	server, host, port := fakeOpenAIServer(t)
+	server, host, port := steadyOpenAIServer(t)
 	defer server.Close()
 	spec := httpTestSpec(t, host, port, "converge-live", 2, 1)
 	spec.Workloads[0].Convergence = wide
@@ -113,8 +131,7 @@ func TestConvergedPointSkipsRemainingSamples(t *testing.T) {
 }
 
 func TestResumeReplaysSamplesIntoConvergence(t *testing.T) {
-	convergeAtMin(t)
-	server, host, port := fakeOpenAIServer(t)
+	server, host, port := steadyOpenAIServer(t)
 	defer server.Close()
 	spec := httpTestSpec(t, host, port, "converge-resume", 2, 1)
 	spec.Workloads[0].Convergence = convergence.Fixed(4)
@@ -126,7 +143,7 @@ func TestResumeReplaysSamplesIntoConvergence(t *testing.T) {
 	// The same four planned samples under a converging policy: the first
 	// three resumed samples stop the point, and the fourth is skipped
 	// although its result file exists.
-	spec.Workloads[0].Convergence = convergence.Policy{MinRepeats: 3, MaxRepeats: 4, TargetRelHalfWidth: 0.05}
+	spec.Workloads[0].Convergence = convergence.Policy{MinRepeats: 3, MaxRepeats: 4, TargetRelHalfWidth: 0.9}
 	options.Resume = true
 	summary, err := Execute(context.Background(), spec, options)
 	if err != nil {
@@ -173,5 +190,47 @@ func TestRecordPointSampleWithoutThroughputStopsAsFailed(t *testing.T) {
 	session.recordPointFailure(planned, context.Canceled)
 	if state := session.points[pointKey(planned)]; len(state.values) != 1 || state.decision.Reason != convergence.ReasonFailed {
 		t.Fatalf("state = %+v", state)
+	}
+}
+
+func TestArtifactCheckRecomputesPointDecisions(t *testing.T) {
+	server, host, port := steadyOpenAIServer(t)
+	defer server.Close()
+	spec := httpTestSpec(t, host, port, "converge-check", 2, 1)
+	spec.Workloads[0].Convergence = wide
+	ApplyDefaults(&spec)
+	runDir := filepath.Join(spec.OutputDir, "converge-check")
+	artifactPath := filepath.Join(spec.OutputDir, "converge-check.sqlite")
+	if _, err := Execute(context.Background(), spec, RunOptions{RunDir: runDir, ArtifactPath: artifactPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := artifact.Check(artifactPath); err != nil {
+		t.Fatalf("artifact.Check(valid) = %v", err)
+	}
+	edits := map[string]string{
+		`recorded reason "max_repeats"`: `UPDATE events SET data_json = json_set(data_json, '$.reason', 'max_repeats') WHERE type = 'point_stopped'`,
+		"completed measurements":        `UPDATE measurements SET aggregate_output_tok_s = aggregate_output_tok_s * 2 WHERE repeat_index = 0`,
+		"without a measurement":         `UPDATE events SET measurement_id = NULL WHERE type = 'point_stopped'`,
+	}
+	for want, statement := range edits {
+		path := filepath.Join(t.TempDir(), "edited.sqlite")
+		data, err := os.ReadFile(artifactPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		if err := artifact.Check(path); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("artifact.Check after %q = %v, want %q", statement, err, want)
+		}
 	}
 }
