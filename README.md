@@ -1,229 +1,173 @@
 # localperf
 
-localperf is a local LLM inference benchmark CLI.
-It runs named benchmark suites against declared deployments, collects all evidence
-in one portable SQLite artifact per model, and renders reports that only label
-what the measurements actually confirm.
+<p align="center">
+  <img src="assets/cover.svg" alt="localperf: a benchmark CLI for local LLM inference that keeps every run in one SQLite file" width="880">
+</p>
 
-It is currently focused on vLLM-managed runs:
+localperf is a benchmark CLI for local LLM inference. It runs a named
+benchmark suite against one model deployment and keeps every run of that model
+in one SQLite file, from which it renders an HTML report.
 
-```sh
-localperf bench run --suite practical-64k --deployment deployment.json \
-  --artifact runs/models/<model-slug>.sqlite
-localperf artifact render runs/models/<model-slug>.sqlite
-localperf view runs/models/<model-slug>.sqlite
-```
+A deployment is either a vLLM server that localperf starts and stops itself,
+or an OpenAI-compatible server that is already running, such as llama.cpp's
+`llama-server`. The suite says what to measure, and the deployment says which
+model and runtime settings to measure it on.
+
+localperf checks the numbers before it reports them. A row labeled "64k
+active" means the requests really put about 64k tokens through the KV cache,
+and a run whose backend fell back to a different kernel is marked invalid
+instead of reported. Every request gets a unique prefix, so a repeated prompt
+cannot be answered from the server's prompt cache.
 
 ## Install
 
-Install with Go:
+Download the archive for your system from the
+[releases](https://github.com/osolmaz/localperf/releases) and check it against
+`SHA256SUMS` before you unpack `localperf`. Or install it with Go 1.26:
 
 ```sh
-go install github.com/osolmaz/localperf/cmd/localperf@v0.1.0
+go install github.com/osolmaz/localperf/cmd/localperf@latest
 ```
 
-Or download a prebuilt binary (linux/darwin, amd64/arm64) from the
-[latest release](https://github.com/osolmaz/localperf/releases/latest).
-From a repo checkout, `go run ./cmd/localperf` works everywhere `localperf`
-appears below.
+Real managed runs need vLLM installed as `vllm`, and enough free memory for
+the model you run. `sqlite3` is useful for looking inside artifacts from the
+shell.
 
-## Requirements
+## First run
 
-- vLLM installed and available as `vllm` for real managed benchmark runs.
-- Enough available system memory for the model profile you run.
-- Go 1.26 or newer only when installing via `go install` or running from
-  source.
-- `sqlite3` if you want to inspect artifacts from the shell.
-
-## Quick Start
-
-Copy the deployment example and set its model, pinned runtime, server options,
-and safety floor:
+Copy the example deployment and set `model` to your model. Then replace the
+`replace-with-...` values with its revision and the pinned vLLM version:
 
 ```sh
 cp examples/deployments/vllm-managed.json deployment.json
 ```
 
-Validate the practical suite and write its exact execution plan without
-starting the model:
+A dry run checks the suite and the deployment and writes the exact execution
+plan without starting the model:
 
 ```sh
 localperf bench run --dry-run \
   --suite practical-64k \
   --deployment deployment.json \
   --run-dir /tmp/localperf-practical-dry
-```
-
-The run directory contains `suite.json`, a redacted `deployment.json`, and
-`execution-plan.json`. Validate its SQLite artifact:
-
-```sh
 localperf artifact check /tmp/localperf-practical-dry.sqlite
 ```
 
-Run the full suite only when the machine is ready for it, pointing batches at
-one model-level artifact:
+When the machine is free, run the full suite into the model's artifact, then
+render the report or open it in the local viewer:
 
 ```sh
 localperf bench run --suite practical-64k --deployment deployment.json --timeout 4h \
-  --artifact runs/models/<model-slug>.sqlite
+  --artifact runs/models/<model>.sqlite
+localperf artifact render runs/models/<model>.sqlite
+localperf view runs/models/<model>.sqlite [runs/models/other.sqlite ...]
 ```
 
-Render the HTML report:
+`view` serves the reports on a temporary local address and puts each artifact
+in its own tab.
 
-```sh
-localperf artifact render runs/models/<model-slug>.sqlite
+## Suites
+
+localperf has three built-in suites. Each one fixes its cases, token shapes,
+request batches, and repeats, so two runs of the same suite measure the same
+thing.
+
+| Suite | What it measures |
+| --- | --- |
+| `practical-64k` | Generation with an almost empty and an almost full 64k context, at 1 and 6 users, three repeats each. Every point reports decode and prefill speed. |
+| `throughput-4k` | Decode throughput at 4k active context with 1, 4, 8, 16, and 32 users, three repeats each. |
+| `context-ladder` | Separate decode and prefill cases at 4k, 8k, 16k, 32k, 64k, and 128k active context, with the same user counts up to 64k and 1 and 4 users at 128k. |
+
+localperf sets `max_model_len` and `max_num_seqs` from the suite cases, and
+refuses runtime arguments that try to change them. Use `--case` and
+`--concurrency` only for a small smoke run or a deliberate subset.
+
+## Deployments
+
+The example in `examples/deployments/vllm-managed.json` starts vLLM itself. To
+measure a server that is already running, set `managed` to `false`, point
+`endpoint_base_url` at it, and use the built-in HTTP client:
+
+```json
+"runtime": {
+  "name": "llama.cpp",
+  "type": "openai-compatible",
+  "owner": "ggml-org",
+  "source": "official release",
+  "version": "b10156",
+  "managed": false,
+  "endpoint_base_url": "http://127.0.0.1:8110",
+  "health_path": "/health"
+},
+"client": {
+  "load_generator": "localperf_http",
+  "backend": "openai-chat",
+  "endpoint": "/v1/chat/completions"
+}
 ```
 
-Open one or more SQLite reports in a temporary local viewer:
+Every deployment has a `safety.min_mem_available_gib` floor. localperf reads
+`/proc/meminfo` before each step and while the server and load generator run.
+When free memory drops below the floor, it stops the current step and records
+the step as skipped or failed. Do not lower the floor to make a run pass.
 
-```sh
-localperf view runs/models/<model-slug>.sqlite [runs/models/other.sqlite ...]
-```
+## Artifacts
 
-## Model-Level Artifacts
+An artifact is one SQLite file that holds everything about a model's runs. It
+stores the suite and deployment with every measurement and request, along with
+GPU telemetry, hardware details, engine identity checks, and the commands and
+logs of each step. Pointing `bench run --artifact` at an existing file adds the
+new run to it, and running the same run directory again replaces that run.
 
-Keep every run of one model in a single SQLite file and render one HTML
-report from it. Pointing `bench run --artifact` at an existing artifact
-appends the new run; re-running the same run directory replaces that run.
-Combine existing per-run artifacts with:
+To combine artifacts that were written separately:
 
 ```sh
 localperf artifact merge \
-  --into runs/models/<model-slug>.sqlite runs/batch-1.sqlite runs/batch-2.sqlite
+  --into runs/models/<model>.sqlite runs/batch-1.sqlite runs/batch-2.sqlite
 ```
 
-Merges are idempotent: runs already present are skipped, and a run id that
-collides with different provenance is refused instead of silently replaced.
-The report lists every run and aggregates repeated points across runs with
-mean ± spread.
+A merge skips runs that are already in the target, and refuses a run whose ID
+matches an existing run with different provenance. The report lists every
+run and shows each repeated point as mean ± spread.
 
-## Suites and deployments
+You can query an artifact directly:
 
-The built-in suites are `practical-64k`, `throughput-4k`, and
-`context-ladder`. A suite owns the cases, token shapes, exact request batches,
-and repeats. A deployment owns the model revision, pinned runtime, requested
-backends, server options, client options, and memory floor. LocalPerf derives
-`max_model_len` and `max_num_seqs` from the selected suite cases and refuses
-runtime arguments that try to override those limits.
-
-`practical-64k` always contains `generate-empty` and `generate-full` at c1 and
-c6, with three repeats: exactly 12 measurements. Every successful practical
-measurement provides both decode and effective-prefill values in the existing
-throughput table. Use repeatable `--case` and `--concurrency` flags only for a
-small smoke run or a deliberate subset.
-
-## Context Semantics
-
-Every suite case declares what its context number means:
-
-```json
-"context_target": 32768,
-"context_semantics": "active"
+```sh
+sqlite3 runs/models/<model>.sqlite \
+  "select run_id, workload_id, concurrency, status, aggregate_output_tok_s from measurements"
 ```
 
-`"active"` claims the workload actually pushes ~N tokens through the KV cache
-and is validated: the requested input+output must land within 90–100% of the
-target, on the random dataset, with a fixed range ratio. `"capacity"` marks a
-server-limit/concurrency point and must match the profile's `max_model_len`.
-Suites that conflate the two are refused before any GPU time is spent, and the
-report labels rows only by declared-and-measured active context or by the
-measured token shape, never by `max_model_len` alone. See
-[Context Semantics](docs/2026-07-02-context-semantics.md) for the contract.
+## Context labels
 
-Every case also declares its role:
+Every suite case says what its context number means. `"active"` means the
+requests put about that many tokens through the KV cache. localperf checks
+that the input and output land within 90 to 100% of the target. `"capacity"`
+means the server's `max_model_len`, which is a limit and says nothing about how
+much context a request used. A suite that mixes the two is refused before any
+GPU time is spent. [Context Semantics](docs/2026-07-02-context-semantics.md)
+has the full rules.
 
-```json
-"role": "benchmark"
-```
+## Prompt cache
 
-Each case lists explicit `{concurrency, requests}` batches. There is no public
-request-scaling rule. Use `"diagnostic"` for probes and troubleshooting.
-Diagnostic evidence stays in the SQLite artifact but is excluded from
-benchmark reports and comparisons. Only validated SQLite artifacts written by
-`localperf bench run` are reportable; raw result JSON and run directories are
-not accepted report inputs.
-
-LocalPerf validates the suite and deployment before compiling an exact
-execution plan, after dataset materialization, immediately before execution,
-and again before writing an artifact. It also requires exact request counts, concurrency, token
-totals, and throughput fields from every successful result. Artifact append,
-merge, check, render, and view run full validation and reject schema drift,
-contract violations, broken foreign keys, or mismatched evidence hashes.
-
-Workloads may also declare latency targets for goodput:
-
-```json
-"slo": {"ttft_p95_ms": 500}
-```
-
-The report then shows the fraction of requests meeting the target and goodput
-in requests per second.
-
-## Prompt Nonces
-
-Every request sent by the built-in HTTP client carries a unique prefix, so a
-repeated prompt cannot be answered from a server's prompt cache. Without it a
-replayed case reports a prefill rate that no cold request can reach.
-
-The prefix lands in the first user turn, so a shared system prompt stays intact.
-Both the salt and a per-send counter make the text new for every repeat and for
-separate runs against a server that stays up. The recorded `prompt_sha256`
-covers the stamped request, and the stamp costs about ten tokens, which stays
-inside the 90–100% active-context band.
-
-Turn it off on a case or a workload to measure prefix reuse on purpose:
+The built-in HTTP client adds a short unique prefix to the first user message
+of every request, so a repeated prompt cannot hit the server's prompt cache and
+report a prefill speed that no cold request reaches. The prefix costs about ten
+tokens. To measure prefix reuse on purpose, turn it off on a case or a
+workload:
 
 ```json
 "prompt_nonce": false
 ```
 
-The setting applies to `localperf_http`. Requests started by the external `vllm`
-load generator are outside LocalPerf's control. See
-[Prompt Nonces](docs/2026-09-18-prompt-nonces.md).
+Requests sent by vLLM's own load generator are outside localperf's control.
+See [Prompt Nonces](docs/2026-09-18-prompt-nonces.md) for the details.
 
-## Outputs
+## Memory on unified-memory machines
 
-Each run writes:
-
-- the SQLite artifact (`--artifact` path, or `runs/<run-id>.sqlite`): the
-  canonical record — specs, engine/profile/workload definitions, measurements,
-  per-request rows, metric stats, GPU telemetry, hardware inventory, engine
-  identity probes, events, commands, and logs. It is also the
-  machine-readable export.
-- `runs/<run-id>/events.jsonl`, `results/*.json`, `logs/*.log`,
-  `summary.json`: raw run data.
-- the HTML report (`artifact render`) and the viewer (`view`) are the only
-  rendered views.
-
-Example inspection:
-
-```sh
-sqlite3 runs/models/<model-slug>.sqlite \
-  "select run_id, profile_id, workload_id, concurrency, status, aggregate_output_tok_s from measurements"
-```
-
-## Memory Safety
-
-Deployments include a `safety.min_mem_available_gib` floor. localperf checks
-`/proc/meminfo` before major steps and while subprocesses run. If available
-memory drops below the floor, the current step is stopped and skipped/failed
-rows are recorded.
-
-On unified-memory systems, do not treat process/cgroup memory as total model
-memory. For capacity planning, compare multiple signals:
-
-- whole-machine `MemAvailable` drop,
-- process/cgroup memory,
-- vLLM KV-cache capacity lines,
-- GPU or platform telemetry when available.
-
-localperf samples GPU utilization and memory during measurements from every
-available source (`tegrastats`, `nvidia-smi`) and names the source in the
-report. See [Measurement Methods](docs/2026-06-23-measurement-methods.md) for
-the memory reporting policy.
-
-## Example
-
-`examples/deployments/vllm-managed.json` shows the strict deployment format.
-Replace its model and runtime settings before running a suite.
+On a machine where the CPU and GPU share memory, such as an NVIDIA DGX Spark,
+process or cgroup memory does not show what the model really uses. Compare the
+drop in `MemAvailable` with the KV cache size that vLLM logs at startup.
+localperf samples GPU use and memory from `tegrastats` and `nvidia-smi` and
+names the source in the report. [Measurement
+Methods](docs/2026-06-23-measurement-methods.md) explains how memory is
+reported.
