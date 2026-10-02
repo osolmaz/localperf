@@ -2188,7 +2188,7 @@ func TestHTTPMergesExtraBody(t *testing.T) {
 			ExtraBody: `{"guided_decoding_backend":"outlines","add_generation_prompt":false}`,
 		}},
 	}
-	body, endpoint, err := client.requestBody(CanonicalRequest{
+	body, endpoint, err := client.requestBody(0, CanonicalRequest{
 		ID:              "request-1",
 		Messages:        []Message{{Role: "user", Content: "hello"}},
 		MaxOutputTokens: 8,
@@ -2203,7 +2203,7 @@ func TestHTTPMergesExtraBody(t *testing.T) {
 		t.Fatalf("extra body was not merged: %+v", body)
 	}
 	client.workload.ExtraBody = `[1]`
-	if _, _, err := client.requestBody(CanonicalRequest{
+	if _, _, err := client.requestBody(0, CanonicalRequest{
 		ID:              "request-1",
 		Messages:        []Message{{Role: "user", Content: "hello"}},
 		MaxOutputTokens: 8,
@@ -2219,7 +2219,7 @@ func TestHTTPUsesCanonicalRequestMode(t *testing.T) {
 			Backend: "openai-chat",
 		}},
 	}
-	body, endpoint, err := client.requestBody(CanonicalRequest{
+	body, endpoint, err := client.requestBody(0, CanonicalRequest{
 		ID:              "request-1",
 		Mode:            "completion",
 		Prompt:          "finish this",

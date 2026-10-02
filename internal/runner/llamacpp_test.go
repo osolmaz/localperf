@@ -54,6 +54,9 @@ func runFakeLlamaServer(args []string) {
 		}
 		writeFakeSSEChatResponse(w, calls.Add(1), 64, 8, 72)
 	})
+	slotState := newFakeLlamaSlots()
+	mux.HandleFunc("/v1/completions", slotState.complete(&calls))
+	mux.HandleFunc("/slots/", slotState.action)
 	serveFakeUntilSignal(flagValue(args, "--port"), mux)
 }
 

@@ -139,17 +139,20 @@ type SQLiteReportWorkload struct {
 }
 
 type SQLiteReportMeasurement struct {
-	ID                             int64
-	RunID                          string
-	ProfileID                      string
-	Profile                        string
-	Model                          string
-	WorkloadID                     string
-	Workload                       string
-	Phase                          string
-	ContextWindow                  int
-	ContextTarget                  int
-	ContextSemantics               string
+	ID               int64
+	RunID            string
+	ProfileID        string
+	Profile          string
+	Model            string
+	WorkloadID       string
+	Workload         string
+	Phase            string
+	ContextWindow    int
+	ContextTarget    int
+	ContextSemantics string
+	// ContextPreparation is "restored" for a decode case that starts every
+	// sample from a saved KV cache; such a row never derives prefill.
+	ContextPreparation             string
 	ContextLabel                   string
 	ContextSortKey                 int
 	ContextMismatch                bool
@@ -908,6 +911,7 @@ func loadSQLiteReportMeasurements(db *sql.DB, doc *SQLiteReportDocument) error {
 		m.id, m.run_id, p.id, p.name, p.model, w.id, w.name, w.phase, COALESCE(p.context_window, 0),
 		COALESCE(json_extract(w.metadata_json, '$.context.target'), 0),
 		COALESCE(json_extract(w.metadata_json, '$.context.semantics'), ''),
+		COALESCE(json_extract(w.metadata_json, '$.context_preparation'), ''),
 		COALESCE(json_extract(w.metadata_json, '$.slo.ttft_p95_ms'), 0),
 		COALESCE(json_extract(w.metadata_json, '$.slo.e2el_p95_ms'), 0),
 		COALESCE(json_extract(m.metadata_json, '$.ttft_source'), ''),
@@ -934,6 +938,7 @@ func loadSQLiteReportMeasurements(db *sql.DB, doc *SQLiteReportDocument) error {
 			&measurement.ID, &measurement.RunID, &measurement.ProfileID, &measurement.Profile, &measurement.Model,
 			&measurement.WorkloadID, &measurement.Workload, &measurement.Phase,
 			&measurement.ContextWindow, &measurement.ContextTarget, &measurement.ContextSemantics,
+			&measurement.ContextPreparation,
 			&measurement.SLOTTFTMillis, &measurement.SLOE2ELMillis,
 			&measurement.TTFTSource,
 			&measurement.RepeatIndex, &measurement.Concurrency,
@@ -1090,7 +1095,9 @@ func applyTTFTDisplay(measurement *SQLiteReportMeasurement, metrics map[string]S
 }
 
 func applyEffectivePrefillDisplay(measurement *SQLiteReportMeasurement, metrics map[string]SQLiteReportMetric) {
-	if measurement.TTFTSource != "stream" {
+	// A restored row prefilled only the request ending, so its TTFT says
+	// nothing about prefill speed.
+	if measurement.TTFTSource != "stream" || measurement.ContextPreparation == contextPreparationRestored {
 		measurement.EffectivePrefillTokS = "-"
 		measurement.RequestEffectivePrefillTokS = "-"
 		measurement.RequestEffectivePrefillP50TokS = "-"
@@ -1939,6 +1946,10 @@ func reportEngineType(engines []SQLiteReportEngine, id string) string {
 // cellDetailMetrics carries the measurement's numbers into the detail view:
 // the artifact records them, so the detail must show them, formatted by the
 // shared display rules. Empty or unmeasured values are dropped, not dashed.
+// contextPreparationRestored matches runner.ContextPreparationRestored; the
+// report reads it from the artifact and does not import the runner.
+const contextPreparationRestored = "restored"
+
 func cellDetailMetrics(measurement SQLiteReportMeasurement) []SQLiteReportMetadataItem {
 	items := []SQLiteReportMetadataItem{
 		{Label: "Requests ok/err", Value: fmt.Sprintf("%d / %d", measurement.CompletedRequests, measurement.FailedRequests)},
@@ -1962,6 +1973,9 @@ func cellDetailMetrics(measurement SQLiteReportMeasurement) []SQLiteReportMetada
 		{Label: "Failures", Value: measurement.FailureBreakdown},
 		{Label: "GPU util", Value: measurement.GPUUtil},
 		{Label: "GPU mem peak", Value: measurement.GPUMemPeak},
+	}
+	if measurement.ContextPreparation == contextPreparationRestored {
+		items = append(items, SQLiteReportMetadataItem{Label: "Context", Value: "restored from a saved KV cache; decode only"})
 	}
 	if measurement.SLONote != "" {
 		items = append(items,

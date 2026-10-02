@@ -81,7 +81,7 @@ the same thing.
 
 | Suite | What it measures |
 | --- | --- |
-| `practical-64k` | Generation with an almost empty and an almost full 64k context, at 1 and 6 users. Every point reports decode and prefill speed. |
+| `practical-64k` | Generation with an almost empty and an almost full 64k context, at 1 and 6 users, and one cold 64k prefill at 1 user. The full-context decode starts from a restored cache, so it measures decode only. |
 | `throughput-4k` | Decode throughput at 4k active context with 1, 4, 8, 16, and 32 users. |
 | `context-ladder` | Separate decode and prefill cases at 4k, 8k, 16k, 32k, 64k, and 128k active context, with the same user counts up to 64k and 1 and 4 users at 128k. |
 
@@ -159,6 +159,15 @@ localperf artifact merge \
 A merge skips runs that are already in the target, and refuses a run whose ID
 matches an existing run with different provenance. The report lists every
 run and shows each repeated point as mean ± spread.
+
+### Restored context
+
+A decode case with a long context starts every sample from a saved KV cache of
+its prompt, so the sample measures decode and not a repeated cold prefill. The
+first run of a case on a model primes the cache once and saves it; later runs
+reuse the file. Every request must report its prompt as cached, or the sample
+fails. Prefill is measured by separate cold cases. This needs llama.cpp; see
+[Restored context decode](docs/2026-10-02-restored-context-decode.md).
 
 ### Convergence
 

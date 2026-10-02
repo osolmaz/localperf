@@ -216,7 +216,7 @@ func TestExtraBodyCannotFlipStreaming(t *testing.T) {
 			},
 		},
 	}
-	body, _, err := client.requestBody(CanonicalRequest{ID: "r1", Prompt: "hi", MaxOutputTokens: 4})
+	body, _, err := client.requestBody(0, CanonicalRequest{ID: "r1", Prompt: "hi", MaxOutputTokens: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

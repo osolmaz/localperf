@@ -137,7 +137,7 @@ endpoint deployments warm up over HTTP.
 
 ## Suite format
 
-A custom suite is a strict version-2 document containing a name, explicit
+A custom suite is a strict version-3 document containing a name, explicit
 warmup, and named cases. Each case declares input/output tokens, context target
 and semantics, phase, role, a convergence policy, deterministic sampling
 options, and exact batches:
@@ -157,6 +157,13 @@ sets `min_repeats` equal to `max_repeats` and omits the target:
 ```json
 "convergence": {"min_repeats": 3, "max_repeats": 10, "target_rel_half_width": 0.05, "max_point_seconds": 600}
 ```
+
+A decode case can set `"context_preparation": "restored"`. Every sample then
+starts from a saved KV cache of the case's base prompt and measures decode
+only. It needs a llama.cpp profile, phase `decode`, `localperf_http`, the
+random dataset, the prompt nonce, and one request per slot in each batch. A
+managed llama-server gets `--slot-save-path` from `runner.snapshot_dir`; an
+endpoint server must be started with `--slot-save-path`.
 
 There is no implicit request scaling and no hidden reference or stress family.
 Prefer the built-in suites whenever one matches the requested benchmark.

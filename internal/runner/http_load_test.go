@@ -95,7 +95,7 @@ func TestRandomHTTPRequestsUseWorkloadBackend(t *testing.T) {
 		t.Fatalf("random request mode = %q, want workload backend to decide", requests[0].Mode)
 	}
 	client := openAIHTTPClient{profile: Profile{Model: "model"}, workload: workload}
-	body, endpoint, err := client.requestBody(requests[0])
+	body, endpoint, err := client.requestBody(0, requests[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestHTTPClientSendsBearerAuth(t *testing.T) {
 		}},
 		client: server.Client(),
 	}
-	payload, endpoint, err := client.requestPayload(CanonicalRequest{
+	payload, endpoint, err := client.requestPayload(0, CanonicalRequest{
 		ID:              "one",
 		Messages:        []Message{{Role: "user", Content: "hello"}},
 		MaxOutputTokens: 2,
@@ -157,7 +157,7 @@ func TestRequestEndpointFollowsRequestModeDefaults(t *testing.T) {
 			},
 		},
 	}
-	body, endpoint, err := client.requestBody(CanonicalRequest{
+	body, endpoint, err := client.requestBody(0, CanonicalRequest{
 		ID:              "one",
 		Mode:            "completion",
 		Prompt:          "hello",
@@ -174,7 +174,7 @@ func TestRequestEndpointFollowsRequestModeDefaults(t *testing.T) {
 	}
 
 	client.workload.Endpoint = "/custom/completions"
-	_, endpoint, err = client.requestBody(CanonicalRequest{
+	_, endpoint, err = client.requestBody(0, CanonicalRequest{
 		ID:              "two",
 		Mode:            "completion",
 		Prompt:          "hello",
@@ -195,7 +195,7 @@ func TestRequestBodyRejectsUnsupportedRequestMode(t *testing.T) {
 			BenchmarkTrafficConfig: BenchmarkTrafficConfig{Backend: "openai-chat"},
 		},
 	}
-	_, _, err := client.requestBody(CanonicalRequest{
+	_, _, err := client.requestBody(0, CanonicalRequest{
 		ID:              "raw",
 		Mode:            "raw_payload",
 		Prompt:          "hello",
@@ -214,7 +214,7 @@ func TestRequestBodyRejectsUnsupportedWorkloadBackend(t *testing.T) {
 			BenchmarkTrafficConfig: BenchmarkTrafficConfig{Backend: "openai-cht"},
 		},
 	}
-	_, _, err := client.requestBody(CanonicalRequest{
+	_, _, err := client.requestBody(0, CanonicalRequest{
 		ID:              "random",
 		Prompt:          "hello",
 		MaxOutputTokens: 8,

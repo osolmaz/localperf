@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -115,6 +116,9 @@ type RunnerConfig struct {
 	StopManagedOnExit    *bool          `json:"stop_managed_on_exit,omitempty"`
 	AppendTimestampToRun *bool          `json:"append_timestamp_to_run,omitempty"`
 	Adaptive             AdaptiveConfig `json:"adaptive,omitempty"`
+	// SnapshotDir holds the context snapshots of restored cases; a managed
+	// llama-server saves and restores slots there.
+	SnapshotDir string `json:"snapshot_dir,omitempty"`
 }
 
 // AdaptiveConfig automates the sparse-search rule from
@@ -201,26 +205,29 @@ type LlamaCppSettings struct {
 
 type Workload struct {
 	BenchmarkTrafficConfig
-	Name                    string             `json:"name"`
-	Role                    string             `json:"role"`
-	Phase                   string             `json:"phase,omitempty"`
-	ContextTarget           int                `json:"context_target"`
-	ContextSemantics        string             `json:"context_semantics"`
-	SLO                     *SLOConfig         `json:"slo,omitempty"`
-	LoadGenerator           string             `json:"load_generator,omitempty"`
-	Dataset                 DatasetSpec        `json:"dataset,omitempty"`
-	Request                 RequestSpec        `json:"request,omitempty"`
-	Profiles                []string           `json:"profiles,omitempty"`
-	NumPrompts              int                `json:"num_prompts"`
-	PromptsPerUser          int                `json:"prompts_per_user,omitempty"`
-	Batches                 []Batch            `json:"batches,omitempty"`
-	Convergence             convergence.Policy `json:"convergence"`
-	MaxConcurrency          []int              `json:"max_concurrency"`
-	Stream                  *bool              `json:"stream,omitempty"`
-	PromptNonce             *bool              `json:"prompt_nonce,omitempty"`
-	IgnoreEOS               bool               `json:"ignore_eos,omitempty"`
-	Temperature             *float64           `json:"temperature,omitempty"`
-	CapturePayloadArtifacts bool               `json:"capture_payload_artifacts,omitempty"`
+	Name             string             `json:"name"`
+	Role             string             `json:"role"`
+	Phase            string             `json:"phase,omitempty"`
+	ContextTarget    int                `json:"context_target"`
+	ContextSemantics string             `json:"context_semantics"`
+	SLO              *SLOConfig         `json:"slo,omitempty"`
+	LoadGenerator    string             `json:"load_generator,omitempty"`
+	Dataset          DatasetSpec        `json:"dataset,omitempty"`
+	Request          RequestSpec        `json:"request,omitempty"`
+	Profiles         []string           `json:"profiles,omitempty"`
+	NumPrompts       int                `json:"num_prompts"`
+	PromptsPerUser   int                `json:"prompts_per_user,omitempty"`
+	Batches          []Batch            `json:"batches,omitempty"`
+	Convergence      convergence.Policy `json:"convergence"`
+	MaxConcurrency   []int              `json:"max_concurrency"`
+	Stream           *bool              `json:"stream,omitempty"`
+	PromptNonce      *bool              `json:"prompt_nonce,omitempty"`
+	// ContextPreparation "restored" starts every decode sample from a saved
+	// KV cache of the base prompt; empty runs the sample cold.
+	ContextPreparation      string   `json:"context_preparation,omitempty"`
+	IgnoreEOS               bool     `json:"ignore_eos,omitempty"`
+	Temperature             *float64 `json:"temperature,omitempty"`
+	CapturePayloadArtifacts bool     `json:"capture_payload_artifacts,omitempty"`
 }
 
 // Batch records the exact number of requests in one concurrency point.
@@ -299,6 +306,23 @@ func applyRunnerDefaults(spec *Spec) {
 	defaultTrue(&spec.Runner.OneAwakeProfile)
 	defaultTrue(&spec.Runner.StopManagedOnExit)
 	defaultTrue(&spec.Runner.AppendTimestampToRun)
+	if strings.TrimSpace(spec.Runner.SnapshotDir) == "" {
+		spec.Runner.SnapshotDir = defaultSnapshotDir()
+	}
+}
+
+// defaultSnapshotDir keeps snapshots across runs, so a later run of the same
+// case on the same model skips the prime. LOCALPERF_SNAPSHOT_DIR overrides
+// it.
+func defaultSnapshotDir() string {
+	if dir := strings.TrimSpace(os.Getenv("LOCALPERF_SNAPSHOT_DIR")); dir != "" {
+		return dir
+	}
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "localperf", "context-snapshots")
 }
 
 func defaultTrue(value **bool) {
@@ -616,6 +640,7 @@ func ValidateSpec(spec Spec) error {
 	issues = append(issues, validateEngineProfiles(spec)...)
 	issues = append(issues, validateLoadGeneratorEngines(spec)...)
 	issues = append(issues, validateWorkloads(spec.Workloads, profileNames, spec.Profiles)...)
+	issues = append(issues, validateRestoredContexts(spec)...)
 	issues = append(issues, validateGeneratorStamp(spec.Generator)...)
 	if len(issues) > 0 {
 		return errors.New(strings.Join(issues, "\n"))

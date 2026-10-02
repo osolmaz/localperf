@@ -418,6 +418,9 @@ func workloadClaimsJSON(workload Workload) any {
 	if workload.SLO != nil {
 		claims["slo"] = workload.SLO
 	}
+	if workload.ContextPreparation != "" {
+		claims["context_preparation"] = workload.ContextPreparation
+	}
 	if len(claims) == 0 {
 		return nil
 	}

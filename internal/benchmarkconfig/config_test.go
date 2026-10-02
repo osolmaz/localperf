@@ -10,7 +10,7 @@ import (
 	"github.com/osolmaz/localperf/internal/runner"
 )
 
-func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
+func TestPracticalSuitePlansItsFivePoints(t *testing.T) {
 	suite, err := LoadSuite("practical-64k")
 	if err != nil {
 		t.Fatal(err)
@@ -23,18 +23,21 @@ func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
 	if compiled.Spec.Provenance != runner.SpecProvenanceGenerated || runner.SpecProvenance(compiled.Spec) != runner.SpecProvenanceGenerated || compiled.Spec.Generator == nil || compiled.Spec.Generator.Tool != "localperf-suite" {
 		t.Fatalf("compiled provenance = %q / %+v", compiled.Spec.Provenance, compiled.Spec.Generator)
 	}
-	// 2 cases x 2 concurrency points x max_repeats 10.
-	if len(plan) != 40 {
-		t.Fatalf("planned measurements = %d, want 40", len(plan))
+	// 5 points (2 decode cases at c1 and c6, prefill-64k at c1) x max_repeats 10.
+	if len(plan) != 50 {
+		t.Fatalf("planned measurements = %d, want 50", len(plan))
 	}
 	want := map[string]map[int]int{
 		"generate-empty": {1: 1, 6: 6},
 		"generate-full":  {1: 1, 6: 6},
+		"prefill-64k":    {1: 1},
 	}
+	phases := map[string]string{"generate-empty": "decode", "generate-full": "decode", "prefill-64k": "prefill"}
+	preparation := map[string]string{"generate-full": runner.ContextPreparationRestored}
 	counts := map[string]map[int]int{}
 	for _, run := range plan {
-		if run.Workload.Phase != "decode" {
-			t.Fatalf("case %s phase = %q, want decode", run.Workload.Name, run.Workload.Phase)
+		if run.Workload.Phase != phases[run.Workload.Name] || run.Workload.ContextPreparation != preparation[run.Workload.Name] {
+			t.Fatalf("case %s phase = %q, preparation = %q", run.Workload.Name, run.Workload.Phase, run.Workload.ContextPreparation)
 		}
 		if run.Workload.NumPrompts != want[run.Workload.Name][run.Concurrency] {
 			t.Fatalf("%s c%d requests = %d, want %d", run.Workload.Name, run.Concurrency, run.Workload.NumPrompts, want[run.Workload.Name][run.Concurrency])
@@ -139,7 +142,8 @@ func TestVLLMDeploymentKeepsRevisionAndBenchCLI(t *testing.T) {
 	deployment := vllmDeployment()
 	deployment.ModelRevision = "abc123"
 	deployment.Client.LoadGenerator = runner.LoadGeneratorVLLMBench
-	compiled, err := Compile(suite, deployment, Selection{})
+	// vLLM has no context preparer, so only the cold cases compile.
+	compiled, err := Compile(suite, deployment, Selection{Cases: []string{"generate-empty"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +374,14 @@ func TestExampleDeploymentsCompile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
-		if _, err := Compile(suite, deployment, Selection{}); err != nil {
+		_, err = Compile(suite, deployment, Selection{})
+		if runner.EngineFamily(deployment.Runtime.Type) == runner.EngineFamilyVLLM {
+			if err == nil || !strings.Contains(err.Error(), "no context preparer") {
+				t.Fatalf("%s: Compile = %v, want restored cases rejected on vLLM", path, err)
+			}
+			_, err = Compile(suite, deployment, Selection{Cases: []string{"generate-empty", "prefill-64k"}})
+		}
+		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
 	}
@@ -387,8 +398,8 @@ func writeSuiteFile(t *testing.T, body string) string {
 
 const convergenceSuiteCase = `{"name":"decode-4k","role":"benchmark","phase":"decode","input_tokens":3000,"output_tokens":1024,"context_target":4096,"context_semantics":"active","batches":[{"concurrency":1,"requests":1}],%s}`
 
-func TestLoadSuiteRequiresVersionTwoConvergence(t *testing.T) {
-	valid := `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":10,"target_rel_half_width":0.05,"max_point_seconds":600}`) + `]}`
+func TestLoadSuiteRequiresVersionThreeConvergence(t *testing.T) {
+	valid := `{"version":"3","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":10,"target_rel_half_width":0.05,"max_point_seconds":600}`) + `]}`
 	suite, err := LoadSuite(writeSuiteFile(t, valid))
 	if err != nil {
 		t.Fatalf("LoadSuite(valid) = %v", err)
@@ -397,11 +408,11 @@ func TestLoadSuiteRequiresVersionTwoConvergence(t *testing.T) {
 		t.Fatalf("convergence = %+v, want %+v", suite.Cases[0].Convergence, DefaultConvergence)
 	}
 	cases := map[string]string{
-		`version must be "2"`:              `{"version":"1","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":1,"max_repeats":1}`) + `]}`,
-		`unknown field "repeats"`:          `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"repeats":3`) + `]}`,
-		"min_repeats must be at least 1":   `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"temperature":0`) + `]}`,
-		"max_repeats must be at most 31":   `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":40,"target_rel_half_width":0.05}`) + `]}`,
-		"min_repeats equal to max_repeats": `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":10}`) + `]}`,
+		`version must be "3"`:              `{"version":"2","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":1,"max_repeats":1}`) + `]}`,
+		`unknown field "repeats"`:          `{"version":"3","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"repeats":3`) + `]}`,
+		"min_repeats must be at least 1":   `{"version":"3","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"temperature":0`) + `]}`,
+		"max_repeats must be at most 31":   `{"version":"3","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":40,"target_rel_half_width":0.05}`) + `]}`,
+		"min_repeats equal to max_repeats": `{"version":"3","name":"custom","cases":[` + fmt.Sprintf(convergenceSuiteCase, `"convergence":{"min_repeats":3,"max_repeats":10}`) + `]}`,
 	}
 	for want, body := range cases {
 		if _, err := LoadSuite(writeSuiteFile(t, body)); err == nil || !strings.Contains(err.Error(), want) {
@@ -439,7 +450,7 @@ func TestCompiledSpecRecordsSuiteVersion(t *testing.T) {
 	if compiled.Spec.Version != Version {
 		t.Fatalf("runner spec version = %q, want %q", compiled.Spec.Version, Version)
 	}
-	if !strings.Contains(string(compiled.Spec.Generator.Intent), `"suite_version":"2"`) {
-		t.Fatalf("generator intent = %s, want suite_version 2", compiled.Spec.Generator.Intent)
+	if !strings.Contains(string(compiled.Spec.Generator.Intent), `"suite_version":"3"`) {
+		t.Fatalf("generator intent = %s, want suite_version 3", compiled.Spec.Generator.Intent)
 	}
 }
