@@ -135,5 +135,5 @@ validate. Otherwise call it diagnostic, partial, failed, or blocked.
 ## Repository checks
 
 For code changes run the checks in `AGENTS.md`, including the one-case dry run.
-For runner or artifact changes also run `scripts/check-crap.sh` and
-`scripts/check-mutation.sh`.
+For runner or artifact changes also run `scripts/check-crap.sh`. Mutation
+testing (`scripts/check-mutation.sh`) is optional; run it only on request.

@@ -221,7 +221,6 @@ go vet ./...
 npx -y @simpledoc/simpledoc check
 go run github.com/osolmaz/slophammer/go/cmd/slophammer-go@v0.4.1 check .
 scripts/check-crap.sh
-scripts/check-mutation.sh
 ```
 
 Then run the required one-case dry benchmark and validate its SQLite artifact.

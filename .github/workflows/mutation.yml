@@ -1,0 +1,26 @@
+name: Mutation
+
+# Mutation testing is optional and is not part of the push or pull-request CI
+# path. It runs as a weekly scan, and by hand from the Actions tab when a
+# mutation report is wanted.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan or full"
+        default: scan
+        required: true
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - run: ./scripts/check-mutation.sh
+        env:
+          LOCALPERF_MUTATION_MODE: ${{ inputs.mode || 'scan' }}
