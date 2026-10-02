@@ -150,8 +150,9 @@ the same point still run. With convergence:
   samples of that point are skipped.
 - There is no automatic retry. A retry would hide an unstable point.
 - The successful samples before the failure stay in the artifact. The report
-  shows their values with the `failed` stop reason, never as a converged
-  result.
+  keeps its existing failure display for the point, and the cell details show
+  the `failed` stop reason with the interval of the earlier samples. It never
+  shows the point as converged.
 - A failed sample is not a value. It does not enter the interval.
 - The ladder rule does not change: a failure still stops the higher
   concurrency points of that profile and workload.
@@ -159,7 +160,9 @@ the same point still run. With convergence:
 ## Interaction with the adaptive ladder
 
 The ladder stop rules in `adaptive.go` now run once per completed point, not
-after each sample. They use the point mean.
+after each sample. They use the point mean of the throughput and the mean of
+the samples' TTFT p99 values. A failed point does not feed these rules; the
+failure already stops the higher concurrency points.
 
 The throughput-plateau rule also uses the intervals. A gain counts only when it
 is at least `min_throughput_gain_pct` and the lower bound of the current point
@@ -171,22 +174,32 @@ the rule compares means as it does today.
 
 - **No schema change.** Samples stay one `measurements` row each. The policy is
   part of the normalized spec, and the decision is in `events`.
-- **One function computes the statistics.** The report calls the same pure
-  function on the stored rows to show `n`, mean, and the 95% interval.
-  `artifact check` recomputes every `point_stopped` decision from the stored
-  rows and fails when the stored decision and the recomputed decision disagree.
+- **One function computes the statistics.** The `point_stopped` event holds a
+  `convergence.StopRecord`: the metric, the reason, the interval, the sample
+  values and durations, and the policy. `artifact check` recomputes every
+  record with the same `Evaluate` function. It fails when the recorded reason or
+  interval disagrees, when a shorter prefix of the samples had already stopped
+  the point, or when the event has no linked measurement. The latest record of
+  each point must also match that point's completed rows with a positive value.
+  Records from an earlier attempt of a resumed run are only checked on their
+  own.
+- **Skipped samples are not part of the point.** The report drops samples that
+  convergence skipped before it combines repeats, so a converged point keeps
+  the status and values of the samples it ran. Skips from the ladder or a guard
+  stay visible as before.
 - **The headline tables do not change.** The headline value stays the mean. The
   metric-cell details show `mean ± half_width (95%, n)` and the stop reason. No
   `Repeats` headline column is added.
-- **Points without a converged result are marked.** A cell whose point stopped
-  on `max_repeats` or `time_budget` gets a visible marker, and its details show
-  the actual interval.
+- **Points without a converged result are marked.** A headline throughput cell
+  whose point stopped on `max_repeats`, `time_budget`, or `failed` gets a `*`
+  marker with the note as its tooltip, in both the HTML report and the viewer.
+  Its details show the note and the actual interval.
 
 ## Code layout
 
-- `internal/convergence`: the policy type, the t table, and
-  `Evaluate(values []float64, durations []time.Duration, policy Policy) Decision`.
-  It has no I/O. Unit tests cover the table edges, `n = 1`, a zero mean,
+- `internal/convergence`: the policy type, the t table,
+  `Evaluate(values []float64, durations []time.Duration, policy Policy) Decision`,
+  and the `StopRecord` event payload with its `Verify` method. It has no I/O. Unit tests cover the table edges, `n = 1`, a zero mean,
   identical samples, each stop reason, and the time-budget estimate. The package
   must pass the Slophammer CRAP and mutation gates.
 - `internal/benchmarkconfig`: suite cases declare `convergence`, and validation
@@ -243,8 +256,9 @@ headline definition in
 The suite format changes, because `repeats` becomes `convergence`. The change
 raises the suite version from `1` to `2`. Deployment files and runner specs keep
 version `1`. A suite file with version `1` or a `repeats` field fails to load
-with a clear error. A runner spec whose workload still has `repeats` also fails
-to load, so an old spec never runs silently with a different repeat count.
+with a clear error. Runner specs are only compiled from a suite and a
+deployment, never loaded from a file, so the suite loader is the only entry
+point that needs this guard.
 
 Old artifacts stay readable. The `workloads.repeats` column keeps its name and
 now stores `max_repeats`, the planned upper bound.

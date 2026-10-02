@@ -94,6 +94,7 @@ type PhaseMetrics = {
   err: number;
   failure_label?: string;
   failure_reason?: string;
+  convergence_note?: string;
   derived?: boolean;
   derived_source?: string;
   derived_formula?: string;
@@ -117,6 +118,7 @@ type CellDetail = {
   concurrency?: number;
   samples_requested?: number;
   shape?: string;
+  convergence_note?: string;
   profile_config?: MetadataItem[];
   metrics?: MetadataItem[];
   serve_command?: string;
@@ -347,13 +349,14 @@ function phaseColumn(reportID: string, phase: Phase, metric: PhaseMetric, header
           metric={row[phase]}
           value={value}
           heat={heat}
+          marked={metric === "tokS"}
         />
       );
     },
   };
 }
 
-function MetricCell({ reportID, metric, value, heat }: { reportID: string; metric: PhaseMetrics; value: string; heat: string }) {
+function MetricCell({ reportID, metric, value, heat, marked }: { reportID: string; metric: PhaseMetrics; value: string; heat: string; marked: boolean }) {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [detail, setDetail] = useState<LoadState<CellDetail> | null>(null);
@@ -429,6 +432,7 @@ function MetricCell({ reportID, metric, value, heat }: { reportID: string; metri
         title={metric.failure_reason || undefined}
       >
         {value || "-"}
+        {marked && metric.convergence_note && <span className="not-converged" title={metric.convergence_note}>*</span>}
       </button>
       {open && createPortal(
         <div
@@ -490,6 +494,7 @@ function DetailBody({ detail, metric }: { detail: LoadState<CellDetail> | null; 
           ))}
         </div>
       )}
+      {(value.convergence_note || metric.convergence_note) && <CodeBlock label="Convergence" value={value.convergence_note || metric.convergence_note || ""} />}
       {(value.failure_reason || metric.failure_reason) && <CodeBlock label="Failure" value={value.failure_reason || metric.failure_reason || ""} />}
       {value.serve_command && <CodeBlock label="Server command" value={value.serve_command} />}
       {value.benchmark_command && <CodeBlock label="Benchmark" value={value.benchmark_command} />}

@@ -13,9 +13,11 @@ behind flags.
 ## `practical-64k`
 
 The practical suite contains only generation from minimal and near-full 64k
-context. It runs `generate-empty` and `generate-full` at concurrency 1 and 6,
-with three repeats. The four cases produce exactly 12 measurements. Each batch
-contains exactly one request per concurrent slot.
+context. It runs `generate-empty` and `generate-full` at concurrency 1 and 6.
+Each of the four points runs 3 to 10 samples under the default convergence
+policy, so the plan holds 40 planned measurements and a stable run completes
+12 of them. Each batch contains exactly one request per concurrent slot. See
+[Adaptive convergence](2026-10-02-adaptive-convergence.md).
 
 Each valid generation measurement populates both decode and effective-prefill
 columns in the established report table. There is no prefill-only case and no
@@ -37,7 +39,8 @@ stop at c4.
 
 ## Execution
 
-The suite owns the cases, token shapes, exact request batches, and repeats. A
+The suite owns the cases, token shapes, exact request batches, and convergence
+policy. A
 deployment JSON file owns the model revision, pinned runtime, requested
 backends, server/client options, and safety floor. LocalPerf derives server
 context and sequence limits from the selected suite cases.

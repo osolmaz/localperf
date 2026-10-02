@@ -454,7 +454,7 @@ func aggregateRepeatMeasurements(measurements []SQLiteReportMeasurement) (aggreg
 		groups[key] = append(groups[key], measurement)
 	}
 	for _, key := range order {
-		members := groups[key]
+		members := measuredRepeats(groups[key])
 		if len(members) == 1 {
 			aggregated = append(aggregated, members[0])
 			continue

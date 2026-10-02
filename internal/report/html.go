@@ -20,6 +20,7 @@ import (
 	"github.com/osolmaz/localperf/internal/artifact"
 	"github.com/osolmaz/localperf/internal/bench"
 	"github.com/osolmaz/localperf/internal/collections"
+	"github.com/osolmaz/localperf/internal/convergence"
 )
 
 const htmlReportName = "report.html"
@@ -216,6 +217,7 @@ type SQLiteReportMeasurement struct {
 	SLORequestCount                int64
 	GoodputRPS                     string
 	RepeatCount                    int
+	Convergence                    *convergence.StopRecord
 	ContextVerified                bool
 	TTFTSource                     string
 	ErrorType                      string
@@ -349,6 +351,7 @@ type SQLiteReportCellDetail struct {
 	Concurrency      int
 	SamplesRequested int
 	Shape            string
+	ConvergenceNote  string
 	ProfileConfig    []SQLiteReportMetadataItem
 	Metrics          []SQLiteReportMetadataItem
 	ServeCommand     string
@@ -472,6 +475,7 @@ func LoadSQLiteReport(path string) (SQLiteReportDocument, error) {
 		loadSQLiteReportMetrics,
 		loadSQLiteReportRequestDerived,
 		loadSQLiteReportMeasurements,
+		loadSQLiteReportConvergence,
 		loadSLOGoodput,
 		loadSQLiteReportRequestSummary,
 		loadSQLiteReportEventCounts,
@@ -1881,7 +1885,8 @@ func sqliteReportCellDetail(doc SQLiteReportDocument, measurement SQLiteReportMe
 		detail.BenchmarkCommand = ""
 	}
 	detail.ProfileConfig = profileConfigItems(profile, reportEngineType(doc.Engines, profile.Engine))
-	detail.Metrics = cellDetailMetrics(measurement)
+	detail.Metrics = append(cellDetailMetrics(measurement), convergenceDetailItems(measurement.Convergence)...)
+	detail.ConvergenceNote = ConvergenceNote(measurement.Convergence)
 	return detail
 }
 
