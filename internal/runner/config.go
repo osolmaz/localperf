@@ -153,9 +153,10 @@ type SafetyConfig struct {
 
 type WarmupConfig struct {
 	BenchmarkTrafficConfig
-	Enabled        bool `json:"enabled"`
-	NumPrompts     int  `json:"num_prompts,omitempty"`
-	MaxConcurrency int  `json:"max_concurrency,omitempty"`
+	Enabled        bool   `json:"enabled"`
+	LoadGenerator  string `json:"load_generator,omitempty"`
+	NumPrompts     int    `json:"num_prompts,omitempty"`
+	MaxConcurrency int    `json:"max_concurrency,omitempty"`
 }
 
 type Profile struct {
@@ -180,6 +181,21 @@ type Profile struct {
 	Env                  map[string]string `json:"env,omitempty"`
 	Args                 []string          `json:"args,omitempty"`
 	EngineArgs           []string          `json:"engine_args,omitempty"`
+	LlamaCpp             *LlamaCppSettings `json:"llama_cpp,omitempty"`
+}
+
+// LlamaCppSettings are the llama-server options localperf owns for a managed
+// llama.cpp profile. The context and slot counts come from the suite through
+// MaxModelLen and MaxNumSeqs.
+type LlamaCppSettings struct {
+	ModelFile  string `json:"model_file"`
+	GPULayers  *int   `json:"gpu_layers,omitempty"`
+	FlashAttn  string `json:"flash_attn,omitempty"`
+	CacheTypeK string `json:"cache_type_k,omitempty"`
+	CacheTypeV string `json:"cache_type_v,omitempty"`
+	BatchSize  int    `json:"batch_size,omitempty"`
+	UBatchSize int    `json:"ubatch_size,omitempty"`
+	Threads    int    `json:"threads,omitempty"`
 }
 
 type Workload struct {
@@ -334,6 +350,7 @@ func applyWarmupDefaults(warmup *WarmupConfig) {
 		return
 	}
 	applyTrafficDefaults(&warmup.BenchmarkTrafficConfig, "random")
+	warmup.LoadGenerator = defaultLoadGenerator(warmup.LoadGenerator)
 	defaultPositiveInt(&warmup.RandomInputLen, 256)
 	defaultPositiveInt(&warmup.RandomOutputLen, 16)
 	defaultPositiveInt(&warmup.NumPrompts, 4)
@@ -538,10 +555,17 @@ func applyTrafficDefaults(traffic *BenchmarkTrafficConfig, defaultDataset string
 }
 
 func applyLoadGeneratorDefault(workload *Workload) {
-	workload.LoadGenerator = normalizeLoadGenerator(workload.LoadGenerator)
-	if workload.LoadGenerator == "" {
-		workload.LoadGenerator = LoadGeneratorVLLMBench
+	workload.LoadGenerator = defaultLoadGenerator(workload.LoadGenerator)
+}
+
+// defaultLoadGenerator picks localperf's own HTTP client unless vLLM's bench
+// CLI was asked for by name: it works against every engine and keeps prompt
+// nonces and streamed TTFT under localperf's control.
+func defaultLoadGenerator(value string) string {
+	if generator := normalizeLoadGenerator(value); generator != "" {
+		return generator
 	}
+	return LoadGeneratorHTTP
 }
 
 // workloadStreams reports whether http-load requests stream. Streaming is
@@ -588,6 +612,8 @@ func ValidateSpec(spec Spec) error {
 	issues = append(issues, validateEndpointBaseURLProfileUsage(spec)...)
 	issues = append(issues, validateWarmup(spec.Warmup)...)
 	issues = append(issues, validateBackendAttestationSetup(spec)...)
+	issues = append(issues, validateEngineProfiles(spec)...)
+	issues = append(issues, validateLoadGeneratorEngines(spec)...)
 	issues = append(issues, validateWorkloads(spec.Workloads, profileNames, spec.Profiles)...)
 	issues = append(issues, validateGeneratorStamp(spec.Generator)...)
 	if len(issues) > 0 {
@@ -675,8 +701,104 @@ func validateEngine(prefix string, engine EngineConfig, names map[string]bool) [
 		issues = append(issues, prefix+": duplicate engine name "+engine.Name)
 	}
 	names[engine.Name] = true
-	if strings.TrimSpace(engine.Type) == "" {
-		issues = append(issues, prefix+": type is required")
+	if !KnownEngineType(engine.Type) {
+		issues = append(issues, prefix+": type must be one of "+strings.Join(EngineTypes(), ", "))
+	}
+	return issues
+}
+
+// validateEngineProfiles keeps each profile consistent with its engine type:
+// only managed types start a server, and only managed llama.cpp profiles
+// carry llama-server settings.
+func validateEngineProfiles(spec Spec) []string {
+	var issues []string
+	for _, profile := range spec.Profiles {
+		engine := EngineForProfile(spec, profile)
+		if !KnownEngineType(engine.Type) {
+			continue
+		}
+		issues = append(issues, validateEngineProfile(profile, engine.Type)...)
+	}
+	return issues
+}
+
+func validateEngineProfile(profile Profile, engineType string) []string {
+	prefix := "profile " + profile.Name
+	var issues []string
+	if profile.Managed != ManagedEngineType(engineType) {
+		issues = append(issues, fmt.Sprintf("%s: managed=%t does not match engine type %s", prefix, profile.Managed, engineType))
+	}
+	if engineType != EngineLlamaCppManaged {
+		if profile.LlamaCpp != nil {
+			issues = append(issues, prefix+": llama_cpp settings require engine type "+EngineLlamaCppManaged)
+		}
+		return issues
+	}
+	return append(issues, validateLlamaCppSettings(prefix, profile.LlamaCpp)...)
+}
+
+func validateLlamaCppSettings(prefix string, settings *LlamaCppSettings) []string {
+	if settings == nil || strings.TrimSpace(settings.ModelFile) == "" {
+		return []string{prefix + ": llama_cpp.model_file is required for a managed llama.cpp profile"}
+	}
+	var issues []string
+	if !validFlashAttn(settings.FlashAttn) {
+		issues = append(issues, prefix+`: llama_cpp.flash_attn must be "on", "off", or "auto"`)
+	}
+	return append(issues, validateLlamaCppCounts(prefix, *settings)...)
+}
+
+func validateLlamaCppCounts(prefix string, settings LlamaCppSettings) []string {
+	var issues []string
+	if settings.GPULayers != nil && *settings.GPULayers < 0 {
+		issues = append(issues, prefix+": llama_cpp.gpu_layers must not be negative")
+	}
+	if min(settings.BatchSize, settings.UBatchSize, settings.Threads) < 0 {
+		issues = append(issues, prefix+": llama_cpp.batch_size, ubatch_size, and threads must not be negative")
+	}
+	return issues
+}
+
+func validFlashAttn(value string) bool {
+	switch value {
+	case "", "on", "off", "auto":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateLoadGeneratorEngines restricts vLLM's bench CLI to vLLM engines;
+// every other engine is driven by localperf's HTTP client.
+func validateLoadGeneratorEngines(spec Spec) []string {
+	profiles := map[string]Profile{}
+	for _, profile := range spec.Profiles {
+		profiles[profile.Name] = profile
+	}
+	var issues []string
+	if spec.Warmup.Enabled && normalizeLoadGenerator(spec.Warmup.LoadGenerator) == LoadGeneratorVLLMBench {
+		issues = append(issues, nonVLLMProfiles(spec, spec.Profiles, "warmup")...)
+	}
+	for _, workload := range spec.Workloads {
+		if normalizeLoadGenerator(workload.LoadGenerator) != LoadGeneratorVLLMBench {
+			continue
+		}
+		var paired []Profile
+		for _, name := range plannedProfileNames(workload, profiles) {
+			paired = append(paired, profiles[name])
+		}
+		issues = append(issues, nonVLLMProfiles(spec, paired, "workload "+workload.Name)...)
+	}
+	return issues
+}
+
+func nonVLLMProfiles(spec Spec, profiles []Profile, owner string) []string {
+	var issues []string
+	for _, profile := range profiles {
+		family := profileEngineFamily(spec, profile)
+		if family != "" && family != EngineFamilyVLLM {
+			issues = append(issues, fmt.Sprintf("%s: load_generator %s requires a vLLM engine, but profile %s uses %s", owner, LoadGeneratorVLLMBench, profile.Name, EngineForProfile(spec, profile).Type))
+		}
 	}
 	return issues
 }
@@ -784,7 +906,7 @@ func invalidEndpointBaseURLProfiles(spec Spec) map[string]bool {
 		return nil
 	}
 	invalid := map[string]bool{}
-	addWarmupEndpointOnlyProfiles(invalid, endpointProfiles, spec.Warmup.Enabled)
+	addWarmupEndpointOnlyProfiles(invalid, endpointProfiles, spec.Warmup.Enabled && normalizeLoadGenerator(spec.Warmup.LoadGenerator) == LoadGeneratorVLLMBench)
 	addWorkloadEndpointOnlyProfiles(invalid, endpointProfiles, spec.Workloads)
 	return invalid
 }
@@ -814,7 +936,7 @@ func addWorkloadEndpointOnlyProfiles(invalid, endpointOnly map[string]bool, work
 func endpointBaseURLProfileIssueMessages(invalid map[string]bool) []string {
 	var issues []string
 	for _, name := range collections.SortedKeys(invalid) {
-		issues = append(issues, "profile "+name+": endpoint_base_url can only be used when warmup is disabled and all referenced workloads use localperf_http")
+		issues = append(issues, "profile "+name+": endpoint_base_url can only be used when warmup and all referenced workloads use localperf_http")
 	}
 	return issues
 }
@@ -1383,7 +1505,7 @@ func RunDir(base string, spec Spec, now time.Time) string {
 	}
 	name := Slug(spec.Name)
 	if name == "" {
-		name = "vllm-bench"
+		name = "localperf"
 	}
 	if spec.Runner.AppendTimestampToRun == nil || *spec.Runner.AppendTimestampToRun {
 		name += "-" + now.UTC().Format("20060102T150405Z")

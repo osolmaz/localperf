@@ -19,6 +19,47 @@ type CommandSpec struct {
 
 func ServeCommand(spec Spec, profile Profile) CommandSpec {
 	engine := EngineForProfile(spec, profile)
+	if EngineFamily(engine.Type) == EngineFamilyLlamaCpp {
+		return llamaCppServeCommand(spec, engine, profile)
+	}
+	return vllmServeCommand(spec, engine, profile)
+}
+
+// llamaCppServeCommand starts llama-server with one slot per suite user.
+// llama.cpp splits --ctx-size across the slots, so each slot gets the
+// suite's full per-request context only when the total is multiplied out.
+func llamaCppServeCommand(spec Spec, engine EngineConfig, profile Profile) CommandSpec {
+	settings := LlamaCppSettings{}
+	if profile.LlamaCpp != nil {
+		settings = *profile.LlamaCpp
+	}
+	slots := profile.MaxNumSeqs
+	if slots <= 0 {
+		slots = 1
+	}
+	builder := argBuilder{
+		engineCommand(engine),
+		"--model", settings.ModelFile,
+		"--alias", profile.Model,
+		"--host", profile.Host,
+		"--port", strconv.Itoa(profile.Port),
+		"--parallel", strconv.Itoa(slots),
+	}
+	builder.integer("--ctx-size", profile.MaxModelLen*slots)
+	builder.optionalInteger("--gpu-layers", settings.GPULayers)
+	builder.string("--flash-attn", settings.FlashAttn)
+	builder.string("--cache-type-k", settings.CacheTypeK)
+	builder.string("--cache-type-v", settings.CacheTypeV)
+	builder.integer("--batch-size", settings.BatchSize)
+	builder.integer("--ubatch-size", settings.UBatchSize)
+	builder.integer("--threads", settings.Threads)
+	return CommandSpec{
+		Env:  mergeEnv(spec.Env, engine.Env, profile.Env, false),
+		Args: append(builder, profileExtraArgs(profile)...),
+	}
+}
+
+func vllmServeCommand(spec Spec, engine EngineConfig, profile Profile) CommandSpec {
 	command := engineCommand(engine)
 	args := []string{
 		command,

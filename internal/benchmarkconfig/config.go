@@ -68,7 +68,6 @@ type Runtime struct {
 	Digest          string            `json:"digest,omitempty"`
 	Command         string            `json:"command,omitempty"`
 	BenchCommand    string            `json:"bench_command,omitempty"`
-	Managed         bool              `json:"managed"`
 	Host            string            `json:"host,omitempty"`
 	Port            int               `json:"port,omitempty"`
 	EndpointBaseURL string            `json:"endpoint_base_url,omitempty"`
@@ -77,16 +76,23 @@ type Runtime struct {
 	Args            []string          `json:"args,omitempty"`
 }
 
+// Server holds the settings shared by every engine plus one block for the
+// engine family: llama_cpp for llama-server and vllm for vLLM.
 type Server struct {
-	MaxNumBatchedTokens  int      `json:"max_num_batched_tokens,omitempty"`
-	GPUMemoryUtilization float64  `json:"gpu_memory_utilization,omitempty"`
-	KVCacheDType         string   `json:"kv_cache_dtype,omitempty"`
-	AttentionBackend     string   `json:"attention_backend,omitempty"`
-	MoEBackend           string   `json:"moe_backend,omitempty"`
-	EnablePrefixCaching  *bool    `json:"enable_prefix_caching,omitempty"`
-	EnableSleepMode      bool     `json:"enable_sleep_mode,omitempty"`
-	SleepLevel           *int     `json:"sleep_level,omitempty"`
-	SpeculativeDecoding  []string `json:"speculative_decoding,omitempty"`
+	EnablePrefixCaching *bool                    `json:"enable_prefix_caching,omitempty"`
+	SpeculativeDecoding []string                 `json:"speculative_decoding,omitempty"`
+	LlamaCpp            *runner.LlamaCppSettings `json:"llama_cpp,omitempty"`
+	VLLM                *VLLMServer              `json:"vllm,omitempty"`
+}
+
+type VLLMServer struct {
+	MaxNumBatchedTokens  int     `json:"max_num_batched_tokens,omitempty"`
+	GPUMemoryUtilization float64 `json:"gpu_memory_utilization,omitempty"`
+	KVCacheDType         string  `json:"kv_cache_dtype,omitempty"`
+	AttentionBackend     string  `json:"attention_backend,omitempty"`
+	MoEBackend           string  `json:"moe_backend,omitempty"`
+	EnableSleepMode      bool    `json:"enable_sleep_mode,omitempty"`
+	SleepLevel           *int    `json:"sleep_level,omitempty"`
 }
 
 type Client struct {
@@ -153,47 +159,19 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		return Compiled{}, err
 	}
 	maxContext, maxConcurrency := suiteLimits(cases)
-	if err := rejectOwnedServerArgs("runtime.args", deployment.Runtime.Args); err != nil {
+	family := runner.EngineFamily(deployment.Runtime.Type)
+	if err := rejectOwnedServerArgs("runtime.args", family, deployment.Runtime.Args); err != nil {
 		return Compiled{}, err
 	}
-	if err := rejectOwnedServerArgs("server.speculative_decoding", deployment.Server.SpeculativeDecoding); err != nil {
+	if err := rejectOwnedServerArgs("server.speculative_decoding", family, deployment.Server.SpeculativeDecoding); err != nil {
 		return Compiled{}, err
 	}
 	if err := rejectCredentialArgs("client.extra_args", deployment.Client.ExtraArgs); err != nil {
 		return Compiled{}, err
 	}
 	profileName := deployment.Name
-	engine := runner.EngineConfig{
-		Name: deployment.Runtime.Name, Type: deployment.Runtime.Type,
-		Command: deployment.Runtime.Command, BenchCommand: deployment.Runtime.BenchCommand,
-		Env: deployment.Runtime.Env,
-		Metadata: map[string]any{
-			"deployment": deployment.Name, "model_revision": deployment.ModelRevision,
-			"runtime_owner": deployment.Runtime.Owner, "runtime_source": deployment.Runtime.Source,
-			"runtime_version_requested": deployment.Runtime.Version, "runtime_digest": deployment.Runtime.Digest,
-			"requested_attention_backend": deployment.Server.AttentionBackend,
-			"requested_moe_backend":       deployment.Server.MoEBackend,
-			"requested_kv_cache_dtype":    deployment.Server.KVCacheDType,
-			"speculative_decoding":        deployment.Server.SpeculativeDecoding,
-		},
-	}
-	managed := deployment.Runtime.Managed
-	engine.Managed = &managed
-	profile := runner.Profile{
-		Name: profileName, Engine: engine.Name, Model: deployment.Model,
-		Host: defaultString(deployment.Runtime.Host, "127.0.0.1"), Port: deployment.Runtime.Port,
-		EndpointBaseURL: deployment.Runtime.EndpointBaseURL, Managed: managed,
-		HealthPath:  defaultString(deployment.Runtime.HealthPath, runner.DefaultHealthPath),
-		Env:         deployment.Runtime.Env,
-		MaxModelLen: maxContext, MaxNumSeqs: maxConcurrency,
-		MaxNumBatchedTokens:  deployment.Server.MaxNumBatchedTokens,
-		GPUMemoryUtilization: deployment.Server.GPUMemoryUtilization,
-		KVCacheDType:         deployment.Server.KVCacheDType,
-		AttentionBackend:     deployment.Server.AttentionBackend, MoEBackend: deployment.Server.MoEBackend,
-		EnablePrefixCaching: deployment.Server.EnablePrefixCaching,
-		EnableSleepMode:     deployment.Server.EnableSleepMode, SleepLevel: deployment.Server.SleepLevel,
-		Args: append(appendRevision(deployment.Runtime.Args, deployment.ModelRevision), deployment.Server.SpeculativeDecoding...),
-	}
+	engine := compileEngine(deployment)
+	profile := compileProfile(deployment, maxContext, maxConcurrency)
 	adaptive := false
 	appendTimestamp := true
 	stopManaged := true
@@ -213,7 +191,7 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		},
 		Warmup:    compileWarmup(suite.Warmup, deployment.Client),
 		Profiles:  []runner.Profile{profile},
-		Workloads: compileCases(cases, profileName, deployment.Client),
+		Workloads: compileCases(cases, profileName, deployment),
 	}
 	runner.ApplyDefaults(&spec)
 	intent, err := json.Marshal(map[string]any{"suite": suite.Name})
@@ -235,6 +213,69 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 	resolvedSuite := suite
 	resolvedSuite.Cases = cases
 	return Compiled{Suite: resolvedSuite, Deployment: deployment, Spec: spec}, nil
+}
+
+func compileEngine(deployment Deployment) runner.EngineConfig {
+	metadata := map[string]any{
+		"deployment": deployment.Name, "model_revision": deployment.ModelRevision,
+		"runtime_owner": deployment.Runtime.Owner, "runtime_source": deployment.Runtime.Source,
+		"runtime_version_requested": deployment.Runtime.Version, "runtime_digest": deployment.Runtime.Digest,
+		"speculative_decoding": deployment.Server.SpeculativeDecoding,
+	}
+	if settings := deployment.Server.LlamaCpp; settings != nil {
+		metadata["requested_flash_attn"] = settings.FlashAttn
+		metadata["requested_cache_type_k"] = settings.CacheTypeK
+		metadata["requested_cache_type_v"] = settings.CacheTypeV
+	}
+	if vllm := deployment.Server.VLLM; vllm != nil {
+		metadata["requested_attention_backend"] = vllm.AttentionBackend
+		metadata["requested_moe_backend"] = vllm.MoEBackend
+		metadata["requested_kv_cache_dtype"] = vllm.KVCacheDType
+	}
+	managed := runner.ManagedEngineType(deployment.Runtime.Type)
+	return runner.EngineConfig{
+		Name: deployment.Runtime.Name, Type: deployment.Runtime.Type,
+		Command: deployment.Runtime.Command, BenchCommand: deployment.Runtime.BenchCommand,
+		Managed: &managed, Env: deployment.Runtime.Env, Metadata: metadata,
+	}
+}
+
+// compileProfile takes the server limits from the suite: the largest context
+// and the largest batch decide the context size and the slot count.
+func compileProfile(deployment Deployment, maxContext, maxConcurrency int) runner.Profile {
+	runtime := deployment.Runtime
+	profile := runner.Profile{
+		Name: deployment.Name, Engine: runtime.Name, Model: deployment.Model,
+		Host: defaultString(runtime.Host, "127.0.0.1"), Port: runtime.Port,
+		EndpointBaseURL: runtime.EndpointBaseURL, Managed: runner.ManagedEngineType(runtime.Type),
+		HealthPath:  defaultString(runtime.HealthPath, runner.DefaultHealthPathFor(runtime.Type)),
+		Env:         runtime.Env,
+		MaxModelLen: maxContext, MaxNumSeqs: maxConcurrency,
+		EnablePrefixCaching: deployment.Server.EnablePrefixCaching,
+		LlamaCpp:            deployment.Server.LlamaCpp,
+		Args:                append(serverArgs(deployment), deployment.Server.SpeculativeDecoding...),
+	}
+	if vllm := deployment.Server.VLLM; vllm != nil {
+		profile.MaxNumBatchedTokens = vllm.MaxNumBatchedTokens
+		profile.GPUMemoryUtilization = vllm.GPUMemoryUtilization
+		profile.KVCacheDType = vllm.KVCacheDType
+		profile.AttentionBackend = vllm.AttentionBackend
+		profile.MoEBackend = vllm.MoEBackend
+		profile.EnableSleepMode = vllm.EnableSleepMode
+		profile.SleepLevel = vllm.SleepLevel
+	}
+	return profile
+}
+
+// serverArgs passes the model revision to vLLM, which downloads by
+// revision. llama-server loads a local GGUF file, so there the revision is
+// provenance only.
+func serverArgs(deployment Deployment) []string {
+	args := append([]string(nil), deployment.Runtime.Args...)
+	if deployment.Runtime.Type == runner.EngineVLLMManaged && strings.TrimSpace(deployment.ModelRevision) != "" {
+		args = append(args, "--revision="+deployment.ModelRevision)
+	}
+	return args
 }
 
 func WriteExecutionFiles(runDir string, compiled Compiled) error {
@@ -357,27 +398,46 @@ func benchmarkCase(name, phase string, input, output, target int, semantics stri
 }
 
 func compileWarmup(warmup Warmup, client Client) runner.WarmupConfig {
-	if defaultString(client.LoadGenerator, runner.LoadGeneratorVLLMBench) == runner.LoadGeneratorHTTP {
-		return runner.WarmupConfig{Enabled: false}
+	return runner.WarmupConfig{
+		Enabled: warmup.Enabled, LoadGenerator: loadGenerator(client),
+		NumPrompts: warmup.Requests, MaxConcurrency: warmup.Concurrency,
+		BenchmarkTrafficConfig: traffic(client, warmup.InputTokens, warmup.OutputTokens, false),
 	}
-	return runner.WarmupConfig{Enabled: warmup.Enabled, NumPrompts: warmup.Requests, MaxConcurrency: warmup.Concurrency, BenchmarkTrafficConfig: traffic(client, warmup.InputTokens, warmup.OutputTokens, false)}
 }
 
-func compileCases(cases []Case, profile string, client Client) []runner.Workload {
+func compileCases(cases []Case, profile string, deployment Deployment) []runner.Workload {
 	workloads := make([]runner.Workload, 0, len(cases))
 	for _, item := range cases {
 		temperature := item.Temperature
+		cfg := traffic(deployment.Client, item.InputTokens, item.OutputTokens, true)
+		cfg.ExtraBody = requestExtraBody(deployment)
 		workloads = append(workloads, runner.Workload{
-			BenchmarkTrafficConfig: traffic(client, item.InputTokens, item.OutputTokens, true),
+			BenchmarkTrafficConfig: cfg,
 			Name:                   item.Name, Role: item.Role, Phase: item.Phase,
 			ContextTarget: item.ContextTarget, ContextSemantics: item.ContextSemantics,
-			LoadGenerator: defaultString(client.LoadGenerator, runner.LoadGeneratorVLLMBench),
+			LoadGenerator: loadGenerator(deployment.Client),
 			Profiles:      []string{profile}, Batches: append([]runner.Batch(nil), item.Batches...),
 			Repeats: item.Repeats, IgnoreEOS: item.IgnoreEOS, Temperature: &temperature,
 			PromptNonce: item.PromptNonce,
 		})
 	}
 	return workloads
+}
+
+// requestExtraBody turns off llama-server's per-slot prompt cache when the
+// deployment disables prefix caching. llama.cpp controls that cache per
+// request, so the switch travels with every request, also to a server that
+// was already running.
+func requestExtraBody(deployment Deployment) string {
+	enabled := deployment.Server.EnablePrefixCaching
+	if runner.EngineFamily(deployment.Runtime.Type) != runner.EngineFamilyLlamaCpp || enabled == nil || *enabled {
+		return ""
+	}
+	return `{"cache_prompt":false}`
+}
+
+func loadGenerator(client Client) string {
+	return defaultString(client.LoadGenerator, runner.LoadGeneratorHTTP)
 }
 
 func traffic(client Client, input, output int, detailed bool) runner.BenchmarkTrafficConfig {
@@ -491,20 +551,18 @@ func validateDeployment(deployment Deployment) error {
 	if strings.TrimSpace(deployment.Model) == "" {
 		issues = append(issues, "model is required")
 	}
-	if strings.TrimSpace(deployment.Runtime.Name) == "" || strings.TrimSpace(deployment.Runtime.Type) == "" {
-		issues = append(issues, "runtime.name and runtime.type are required")
+	if strings.TrimSpace(deployment.Runtime.Name) == "" {
+		issues = append(issues, "runtime.name is required")
 	}
-	if deployment.Runtime.Port <= 0 && strings.TrimSpace(deployment.Runtime.EndpointBaseURL) == "" {
-		issues = append(issues, "runtime.port is required without endpoint_base_url")
-	}
-	if deployment.Runtime.Managed && strings.TrimSpace(deployment.Runtime.Command) == "" {
-		issues = append(issues, "runtime.command is required for a managed deployment")
+	if !runner.KnownEngineType(deployment.Runtime.Type) {
+		issues = append(issues, "runtime.type must be one of "+strings.Join(runner.EngineTypes(), ", "))
+	} else {
+		issues = append(issues, validateRuntime(deployment.Runtime)...)
+		issues = append(issues, validateServerBlocks(deployment)...)
+		issues = append(issues, validateClient(deployment)...)
 	}
 	if deployment.Safety.MinMemAvailableGiB <= 0 {
 		issues = append(issues, "safety.min_mem_available_gib must be positive")
-	}
-	if defaultString(deployment.Client.LoadGenerator, runner.LoadGeneratorVLLMBench) == runner.LoadGeneratorHTTP && (strings.TrimSpace(deployment.Client.Tokenizer) != "" || len(deployment.Client.ExtraArgs) > 0) {
-		issues = append(issues, "client.tokenizer and client.extra_args are unsupported with localperf_http")
 	}
 	if len(issues) > 0 {
 		return errors.New(strings.Join(issues, "\n"))
@@ -512,13 +570,88 @@ func validateDeployment(deployment Deployment) error {
 	return nil
 }
 
-func rejectOwnedServerArgs(field string, args []string) error {
+// validateRuntime checks the fields each runtime type needs: a managed type
+// starts runtime.command on runtime.port; an endpoint type talks to a server
+// that is already running and starts nothing.
+func validateRuntime(runtime Runtime) []string {
+	var issues []string
+	if runner.ManagedEngineType(runtime.Type) {
+		if strings.TrimSpace(runtime.Command) == "" {
+			issues = append(issues, "runtime.command is required for "+runtime.Type)
+		}
+		if runtime.Port <= 0 {
+			issues = append(issues, "runtime.port is required for "+runtime.Type)
+		}
+		if strings.TrimSpace(runtime.EndpointBaseURL) != "" {
+			issues = append(issues, "runtime.endpoint_base_url is for endpoint types; "+runtime.Type+" serves on runtime.host and runtime.port")
+		}
+	} else {
+		if strings.TrimSpace(runtime.Command) != "" {
+			issues = append(issues, "runtime.command is for managed types; "+runtime.Type+" does not start a server")
+		}
+		if runtime.Port <= 0 && strings.TrimSpace(runtime.EndpointBaseURL) == "" {
+			issues = append(issues, "runtime.endpoint_base_url or runtime.port is required for "+runtime.Type)
+		}
+	}
+	if strings.TrimSpace(runtime.BenchCommand) != "" && runner.EngineFamily(runtime.Type) != runner.EngineFamilyVLLM {
+		issues = append(issues, "runtime.bench_command is for vLLM runtimes")
+	}
+	return issues
+}
+
+// validateServerBlocks keeps engine settings with their engine: llama_cpp
+// only on a managed llama.cpp runtime (a running server owns its own
+// settings, and localperf reads them from /props), vllm only on vLLM.
+func validateServerBlocks(deployment Deployment) []string {
+	var issues []string
+	runtimeType := deployment.Runtime.Type
+	if runtimeType == runner.EngineLlamaCppManaged && (deployment.Server.LlamaCpp == nil || strings.TrimSpace(deployment.Server.LlamaCpp.ModelFile) == "") {
+		issues = append(issues, "server.llama_cpp.model_file is required for "+runtimeType)
+	}
+	if deployment.Server.LlamaCpp != nil && runtimeType != runner.EngineLlamaCppManaged {
+		issues = append(issues, "server.llama_cpp is only for "+runner.EngineLlamaCppManaged)
+	}
+	if deployment.Server.VLLM != nil && runner.EngineFamily(runtimeType) != runner.EngineFamilyVLLM {
+		issues = append(issues, "server.vllm is only for vLLM runtimes")
+	}
+	return issues
+}
+
+func validateClient(deployment Deployment) []string {
+	var issues []string
+	generator := loadGenerator(deployment.Client)
+	if generator == runner.LoadGeneratorVLLMBench && runner.EngineFamily(deployment.Runtime.Type) != runner.EngineFamilyVLLM {
+		issues = append(issues, "client.load_generator vllm_bench requires a vLLM runtime")
+	}
+	if generator == runner.LoadGeneratorHTTP && (strings.TrimSpace(deployment.Client.Tokenizer) != "" || len(deployment.Client.ExtraArgs) > 0) {
+		issues = append(issues, "client.tokenizer and client.extra_args are unsupported with localperf_http")
+	}
+	return issues
+}
+
+// ownedServerFlags are the flags localperf sets from the suite and the
+// structured deployment fields; passing them again in args would change
+// what the suite measures without the artifact knowing.
+var ownedServerFlags = map[string][]string{
+	runner.EngineFamilyLlamaCpp: {
+		"-m", "--model", "-a", "--alias", "--host", "--port", "-c", "--ctx-size", "-np", "--parallel",
+		"-ngl", "--gpu-layers", "--n-gpu-layers", "-fa", "--flash-attn", "-ctk", "--cache-type-k",
+		"-ctv", "--cache-type-v", "-b", "--batch-size", "-ub", "--ubatch-size", "-t", "--threads",
+		"-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-mu", "--model-url",
+	},
+	runner.EngineFamilyVLLM: {
+		"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization",
+		"--kv-cache-dtype", "--attention-backend", "--moe-backend", "--enable-prefix-caching",
+		"--no-enable-prefix-caching", "--enable-sleep-mode", "--profiler-config", "--revision",
+	},
+}
+
+func rejectOwnedServerArgs(field, family string, args []string) error {
 	if err := rejectCredentialArgs(field, args); err != nil {
 		return err
 	}
-	owned := []string{"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization", "--kv-cache-dtype", "--attention-backend", "--moe-backend", "--enable-prefix-caching", "--no-enable-prefix-caching", "--enable-sleep-mode", "--profiler-config", "--revision"}
 	for _, arg := range args {
-		for _, flag := range owned {
+		for _, flag := range ownedServerFlags[family] {
 			if arg == flag || strings.HasPrefix(arg, flag+"=") {
 				return fmt.Errorf("%s contains %s; set the structured deployment field instead (suite-derived limits cannot be overridden; attestation cannot be overridden)", field, flag)
 			}
@@ -547,14 +680,6 @@ func sensitiveArgumentFlag(arg string) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-func appendRevision(args []string, revision string) []string {
-	out := append([]string(nil), args...)
-	if strings.TrimSpace(revision) != "" {
-		out = append(out, "--revision="+revision)
-	}
-	return out
 }
 
 func loadStrictJSON(path string, out any) error {
