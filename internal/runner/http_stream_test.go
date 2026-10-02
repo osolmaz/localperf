@@ -66,7 +66,7 @@ func TestStreamingBenchmarkMeasuresTTFT(t *testing.T) {
 	const firstTokenDelay = 60 * time.Millisecond
 	server := sseTestServer(t, firstTokenDelay, 10*time.Millisecond, 4)
 	defer server.Close()
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, nil))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestNonStreamingBenchmarkRecordsNoTTFT(t *testing.T) {
 	}))
 	defer server.Close()
 	stream := false
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, &stream))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, &stream))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestStreamWithNeitherTokenNorFinishFailsShape(t *testing.T) {
 		fl.Flush()
 	}))
 	defer server.Close()
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, nil))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestStreamWithoutUsageDoesNotFabricateTokens(t *testing.T) {
 	// request.OutputTokensExpected is 8 (RandomOutputLen); assert we never see it.
 	for _, tc := range []struct{ chunks, wantTokens int }{{0, 0}, {3, 3}} {
 		srv := makeServer(tc.chunks)
-		result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(srv.URL, nil))
+		result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(srv.URL, nil))
 		srv.Close()
 		if err != nil {
 			t.Fatalf("chunks=%d: %v", tc.chunks, err)
@@ -318,7 +318,7 @@ func TestTruncatedStreamFailsRequest(t *testing.T) {
 		_, _ = fmt.Fprint(w, "data: {\"id\":\"trunc-1\",\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
 	}))
 	defer server.Close()
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, nil))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestStreamErrorChunkFailsRequest(t *testing.T) {
 		_, _ = fmt.Fprint(w, "data: {\"error\":{\"message\":\"boom\",\"type\":\"server_error\"}}\n\n")
 	}))
 	defer server.Close()
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, nil))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestStreamingReasoningContentCountsForTTFT(t *testing.T) {
 		fl.Flush()
 	}))
 	defer server.Close()
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, nil))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestStreamingFinishWithNoContentCompletes(t *testing.T) {
 		fl.Flush()
 	}))
 	defer server.Close()
-	result, err := runHTTPBenchmark(context.Background(), streamTestPlannedRun(server.URL, nil))
+	result, err := runHTTPBenchmark(context.Background(), EngineConfig{}, streamTestPlannedRun(server.URL, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

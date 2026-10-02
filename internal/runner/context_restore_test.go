@@ -59,7 +59,7 @@ func TestRestoredDecodePrimesOnceAndRestoresEverySample(t *testing.T) {
 	plan := BuildPlan(spec, filepath.Dir(summary.EventsPath))
 	first, second := readHTTPResult(t, plan[0].ResultFile), readHTTPResult(t, plan[1].ResultFile)
 	base := restoredBasePrompt(spec.Workloads[0])
-	snapshot := restoredSnapshotFile(spec.Profiles[0], base)
+	snapshot := restoredSnapshotFile(spec.Engines[0], spec.Profiles[0], base)
 	for index, result := range []HTTPBenchmarkResult{first, second} {
 		preparation := result.ContextPreparation
 		if preparation == nil || preparation.SnapshotFile != snapshot || preparation.RestoredTokens != wordCount(base) || len(preparation.RestoreMillis) != 2 {
@@ -156,15 +156,40 @@ func TestValidateRestoredContexts(t *testing.T) {
 }
 
 func TestRestoredSnapshotFileChangesWithItsInputs(t *testing.T) {
-	profile := Profile{Model: "m", LlamaCpp: &LlamaCppSettings{ModelFile: "/a.gguf", CacheTypeK: "f16"}}
-	base := restoredSnapshotFile(profile, "prompt")
-	if base != restoredSnapshotFile(profile, "prompt") || !strings.HasPrefix(base, "localperf-") || !strings.HasSuffix(base, ".bin") {
+	engine := EngineConfig{Command: "llama-server", Metadata: map[string]any{"model_revision": "r1", "runtime_version_requested": "b1", "runtime_digest": "d1"}}
+	profile := Profile{Model: "m", MaxModelLen: 8192, LlamaCpp: &LlamaCppSettings{ModelFile: "/a.gguf", CacheTypeK: "f16"}}
+	base := restoredSnapshotFile(engine, profile, "prompt")
+	if base != restoredSnapshotFile(engine, profile, "prompt") || !strings.HasPrefix(base, "localperf-") || !strings.HasSuffix(base, ".bin") {
 		t.Fatalf("snapshot name %q is not stable", base)
 	}
-	other := profile
-	other.LlamaCpp = &LlamaCppSettings{ModelFile: "/a.gguf", CacheTypeK: "q8_0"}
-	if restoredSnapshotFile(other, "prompt") == base || restoredSnapshotFile(profile, "other prompt") == base {
-		t.Fatal("snapshot name must change with the KV cache type and the base prompt")
+	changes := map[string]func(*EngineConfig, *Profile){
+		"model revision": func(e *EngineConfig, _ *Profile) {
+			e.Metadata = map[string]any{"model_revision": "r2", "runtime_version_requested": "b1", "runtime_digest": "d1"}
+		},
+		"runtime version": func(e *EngineConfig, _ *Profile) {
+			e.Metadata = map[string]any{"model_revision": "r1", "runtime_version_requested": "b2", "runtime_digest": "d1"}
+		},
+		"runtime digest": func(e *EngineConfig, _ *Profile) {
+			e.Metadata = map[string]any{"model_revision": "r1", "runtime_version_requested": "b1", "runtime_digest": "d2"}
+		},
+		"runtime command": func(e *EngineConfig, _ *Profile) { e.Command = "/other/llama-server" },
+		"KV cache type": func(_ *EngineConfig, p *Profile) {
+			p.LlamaCpp = &LlamaCppSettings{ModelFile: "/a.gguf", CacheTypeK: "q8_0"}
+		},
+		"flash attention": func(_ *EngineConfig, p *Profile) {
+			p.LlamaCpp = &LlamaCppSettings{ModelFile: "/a.gguf", CacheTypeK: "f16", FlashAttn: "on"}
+		},
+		"slot context": func(_ *EngineConfig, p *Profile) { p.MaxModelLen = 16384 },
+	}
+	for name, change := range changes {
+		changedEngine, changedProfile := engine, profile
+		change(&changedEngine, &changedProfile)
+		if restoredSnapshotFile(changedEngine, changedProfile, "prompt") == base {
+			t.Fatalf("snapshot name must change with the %s", name)
+		}
+	}
+	if restoredSnapshotFile(engine, profile, "other prompt") == base {
+		t.Fatal("snapshot name must change with the base prompt")
 	}
 	if got := wordCount(restoredBasePrompt(Workload{BenchmarkTrafficConfig: BenchmarkTrafficConfig{RandomInputLen: 100}})); got != 100-restoredPromptReserve {
 		t.Fatalf("base prompt words = %d, want %d", got, 100-restoredPromptReserve)

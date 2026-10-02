@@ -175,7 +175,7 @@ func executeHTTPBench(ctx context.Context, spec Spec, planned PlannedRun, logPat
 	}
 	memoryMonitor := monitorMemoryFloor(runCtx, cancel, spec.Safety.MinMemAvailableGiB, time.Duration(spec.Safety.PollIntervalMillis)*time.Millisecond)
 	start := time.Now()
-	result, runErr := runHTTPBenchmark(runCtx, planned)
+	result, runErr := runHTTPBenchmark(runCtx, EngineForProfile(spec, planned.Profile), planned)
 	duration := time.Since(start)
 	memoryErr := stopHTTPMemoryMonitor(cancel, memoryMonitor)
 	resultWritten, runErr := persistHTTPResult(planned.ResultFile, logPath, result, duration, runErr, memoryErr)
@@ -244,7 +244,7 @@ func httpRunError(runCtx context.Context, spec Spec, runErr, memoryErr error, re
 	return nil
 }
 
-func runHTTPBenchmark(ctx context.Context, planned PlannedRun) (*HTTPBenchmarkResult, error) {
+func runHTTPBenchmark(ctx context.Context, engine EngineConfig, planned PlannedRun) (*HTTPBenchmarkResult, error) {
 	requests, err := plannedRunHTTPRequests(ctx, planned)
 	if err != nil {
 		return nil, err
@@ -261,7 +261,7 @@ func runHTTPBenchmark(ctx context.Context, planned PlannedRun) (*HTTPBenchmarkRe
 	if planned.Workload.restoresContext() {
 		// Preparation runs before the sample clock starts: priming and
 		// restoring the context are setup, not decode.
-		prepared, evidence, err := prepareRestoredContext(ctx, client, planned)
+		prepared, evidence, err := prepareRestoredContext(ctx, client, engine, planned)
 		if err != nil {
 			return nil, err
 		}
