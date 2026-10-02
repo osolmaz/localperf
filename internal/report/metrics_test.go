@@ -531,7 +531,7 @@ func TestMultiRunReportAggregatesAcrossRuns(t *testing.T) {
 	if err := RenderHTMLReport(&out, doc, HTMLReportOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Runs", "run-1", "run-2", "Latest Run"} {
+	for _, want := range []string{"Runs", "run-1", "run-2", "Latest run"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("HTML report missing %q", want)
 		}
