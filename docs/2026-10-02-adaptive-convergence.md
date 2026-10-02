@@ -72,7 +72,7 @@ Each completed point records exactly one stop reason:
 | `max_repeats` | The point reached `max_repeats` and the rule did not fire.           |
 | `time_budget` | The next sample would exceed `max_point_seconds`.                    |
 | `fixed`       | `min_repeats == max_repeats` and there is no target.                 |
-| `failed`      | A sample failed, and the point stopped as it does today.             |
+| `failed`      | A sample failed. See [Failed samples](#failed-samples).              |
 
 The time limit never interrupts a running sample. Before a new sample starts,
 LocalPerf estimates its duration as the mean duration of the previous samples of
@@ -121,6 +121,37 @@ still read correctly: their rows are samples of points with a fixed count.
   half-width, and the policy.
 - **Samples of one point run in sequence.** The current plan order already does
   this. Convergence needs it, because the rule evaluates one point at a time.
+
+### Resume
+
+A resumed run already skips planned samples whose result file parses as
+complete with zero failed requests, and it replays those rows into the adaptive
+ladder. Resumed samples also feed convergence:
+
+- The runner replays resumed samples of a point in repeat order, with their
+  stored values and durations, before it runs any new sample of that point.
+- When the replayed samples already satisfy a stop reason, the point stops at
+  once, and its remaining planned samples are skipped as usual.
+- Otherwise the point continues with the next missing repeat. It never starts
+  over and never repeats a sample that already has a valid result.
+- The elapsed time for `max_point_seconds` is the sum of the sample durations,
+  resumed and new. Time between attempts does not count.
+
+### Failed samples
+
+A sample fails when it returns an error or reports any failed request. Today a
+failure stops the ladder above that concurrency, but the remaining repeats of
+the same point still run. With convergence:
+
+- A failed sample stops its point with reason `failed`. The remaining planned
+  samples of that point are skipped.
+- There is no automatic retry. A retry would hide an unstable point.
+- The successful samples before the failure stay in the artifact. The report
+  shows their values with the `failed` stop reason, never as a converged
+  result.
+- A failed sample is not a value. It does not enter the interval.
+- The ladder rule does not change: a failure still stops the higher
+  concurrency points of that profile and workload.
 
 ## Interaction with the adaptive ladder
 
