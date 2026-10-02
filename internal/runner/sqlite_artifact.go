@@ -879,7 +879,7 @@ func insertMetricStats(tx *sql.Tx, measurementID int64, row ReportRow, samples [
 	if err := insertAggregateMetricStats(tx, measurementID, row); err != nil {
 		return err
 	}
-	if row.TTFTSource == TTFTSourceStream {
+	if row.TTFTSource == TTFTSourceStream && !anyPromptCached(samples) {
 		if value, ok := measurementEffectivePrefillThroughput(samples); ok {
 			if err := insertAggregateMetricStat(tx, measurementID, aggregateMetricStat{
 				metric: "effective_prefill_throughput",
@@ -969,7 +969,7 @@ func sampleMetricDistributions(row ReportRow, samples []RequestSample) []sampleM
 		{"request_tpot", "ms", statsFromSamples(samples, false, func(sample RequestSample) float64 { return sample.TPOTMillis })},
 		{"request_itl_mean", "ms", statsFromSamples(samples, false, func(sample RequestSample) float64 { return sample.ITLMeanMillis })},
 	}
-	if row.TTFTSource == TTFTSourceStream {
+	if row.TTFTSource == TTFTSourceStream && !anyPromptCached(samples) {
 		distributions = append(distributions, sampleMetricDistribution{
 			"request_effective_prefill_throughput",
 			"tok/s",
@@ -977,6 +977,18 @@ func sampleMetricDistributions(row ReportRow, samples []RequestSample) []sampleM
 		})
 	}
 	return distributions
+}
+
+// anyPromptCached reports whether a server answered part of a prompt from its
+// cache, as every restored-context request does. Prompt tokens over TTFT is
+// then not a prefill speed, so no effective-prefill metric is stored.
+func anyPromptCached(samples []RequestSample) bool {
+	for _, sample := range samples {
+		if sample.CachedPromptTokens != nil && *sample.CachedPromptTokens > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func requestEffectivePrefillThroughput(sample RequestSample) float64 {

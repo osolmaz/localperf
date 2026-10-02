@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -75,6 +76,18 @@ func TestRestoredDecodePrimesOnceAndRestoresEverySample(t *testing.T) {
 		t.Fatalf("primed = %t then %t, want only the first sample to prime", first.ContextPreparation.Primed, second.ContextPreparation.Primed)
 	}
 	assertRestoredBodies(t, spec.Env["FAKE_LLAMA_BODIES"], base)
+	db, err := sql.Open("sqlite", summary.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var prefillStats int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM metric_stats WHERE metric LIKE '%effective_prefill%'`).Scan(&prefillStats); err != nil {
+		t.Fatal(err)
+	}
+	if prefillStats != 0 {
+		t.Fatalf("restored samples stored %d effective-prefill metric(s), want none", prefillStats)
+	}
 }
 
 // assertRestoredBodies checks the wire shape: one prime with the bare base
@@ -179,7 +192,8 @@ func TestRestoredSnapshotFileChangesWithItsInputs(t *testing.T) {
 		"flash attention": func(_ *EngineConfig, p *Profile) {
 			p.LlamaCpp = &LlamaCppSettings{ModelFile: "/a.gguf", CacheTypeK: "f16", FlashAttn: "on"}
 		},
-		"slot context": func(_ *EngineConfig, p *Profile) { p.MaxModelLen = 16384 },
+		"slot context":    func(_ *EngineConfig, p *Profile) { p.MaxModelLen = 16384 },
+		"server argument": func(_ *EngineConfig, p *Profile) { p.Args = []string{"--rope-scaling", "yarn"} },
 	}
 	for name, change := range changes {
 		changedEngine, changedProfile := engine, profile
