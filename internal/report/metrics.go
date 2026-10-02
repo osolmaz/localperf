@@ -441,13 +441,13 @@ func formatFailureCounts(counts map[string]int) string {
 // as signal.
 func aggregateRepeatMeasurements(measurements []SQLiteReportMeasurement) (aggregated, repeats []SQLiteReportMeasurement) {
 	type groupKey struct {
-		profile, workload, phase string
-		concurrency              int
+		profile, workload, phase, preparation string
+		concurrency                           int
 	}
 	groups := map[groupKey][]SQLiteReportMeasurement{}
 	order := []groupKey{}
 	for _, measurement := range measurements {
-		key := groupKey{measurement.Profile, measurement.Workload, measurement.Phase, measurement.Concurrency}
+		key := groupKey{measurement.Profile, measurement.Workload, measurement.Phase, measurement.ContextPreparation, measurement.Concurrency}
 		if _, seen := groups[key]; !seen {
 			order = append(order, key)
 		}
@@ -468,6 +468,7 @@ func aggregateRepeatMeasurements(measurements []SQLiteReportMeasurement) (aggreg
 func combineRepeats(members []SQLiteReportMeasurement) SQLiteReportMeasurement {
 	combined := members[0]
 	combined.RepeatCount = len(members)
+	combined.Convergence = sharedConvergence(members)
 	combined.CompletedRequests = 0
 	combined.FailedRequests = 0
 	// Sum token totals and wall time along with request counts so

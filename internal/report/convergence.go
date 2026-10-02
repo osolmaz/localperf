@@ -65,6 +65,19 @@ func measuredRepeats(members []SQLiteReportMeasurement) []SQLiteReportMeasuremen
 	return measured
 }
 
+// sharedConvergence is the decision of a combined row only when every member
+// belongs to that one decision. Repeats pooled across runs have no single
+// decision, so the row shows none rather than one run's interval.
+func sharedConvergence(members []SQLiteReportMeasurement) *convergence.StopRecord {
+	record := members[0].Convergence
+	for _, member := range members[1:] {
+		if member.Convergence != record {
+			return nil
+		}
+	}
+	return record
+}
+
 // convergenceDetailItems shows the stop reason and the 95% interval of the
 // point's throughput in the metric-cell details.
 func convergenceDetailItems(record *convergence.StopRecord) []SQLiteReportMetadataItem {

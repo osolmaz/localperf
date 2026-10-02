@@ -94,6 +94,11 @@ and the restored token count. Every request records its cached prompt tokens.
 - A restored case never derives effective prefill. Its prefill columns come
   from a dedicated prefill case with the same context target and concurrency,
   or show `-`.
+- Restored and cold samples of the same case never pool as repeats. A restored
+  row's shape ends in `· restored context`, so it also never shares a table
+  row with a cold measurement from an older run in the same model artifact.
+- Repeats pooled across runs show no stop decision, because no single
+  decision covers them.
 
 ## Built-in suites
 
