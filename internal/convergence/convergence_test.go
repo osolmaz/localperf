@@ -188,3 +188,67 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+func recordOf(values []float64, seconds []float64, policy Policy) StopRecord {
+	decision := Evaluate(values, durationsOf(seconds), policy)
+	return NewStopRecord("aggregate_output_tok_s", decision, values, durationsOf(seconds), policy, "")
+}
+
+func durationsOf(values []float64) []time.Duration {
+	out := make([]time.Duration, len(values))
+	for index, value := range values {
+		out[index] = time.Duration(value * float64(time.Second))
+	}
+	return out
+}
+
+func TestStopRecordVerifyAcceptsRecordedDecisions(t *testing.T) {
+	records := []StopRecord{
+		recordOf([]float64{100, 100.5, 99.5}, []float64{1, 1, 1}, defaultPolicy),
+		recordOf([]float64{7}, []float64{1}, Fixed(1)),
+		recordOf([]float64{80, 120}, []float64{40, 40}, Policy{MinRepeats: 3, MaxRepeats: 10, TargetRelHalfWidth: 0.01, MaxPointSeconds: 100}),
+		NewStopRecord("aggregate_output_tok_s", Failed([]float64{80, 120}), []float64{80, 120}, durationsOf([]float64{1, 1}), defaultPolicy, "boom"),
+		NewStopRecord("aggregate_output_tok_s", Failed(nil), nil, nil, defaultPolicy, "boom"),
+	}
+	for _, record := range records {
+		if !record.Reason.valid() {
+			t.Fatalf("record reason %q is not a stop reason", record.Reason)
+		}
+		if err := record.Verify(); err != nil {
+			t.Fatalf("Verify(%+v) = %v", record, err)
+		}
+	}
+}
+
+func TestStopRecordVerifyRejectsTamperedRecords(t *testing.T) {
+	good := recordOf([]float64{100, 100.5, 99.5}, []float64{1, 1, 1}, defaultPolicy)
+	tampered := map[string]func(*StopRecord){
+		"recorded reason":   func(record *StopRecord) { record.Reason = ReasonMaxRepeats },
+		"recorded interval": func(record *StopRecord) { record.Mean += 1 },
+		"value(s)":          func(record *StopRecord) { record.N = 2 },
+		"policy":            func(record *StopRecord) { record.Policy.MaxRepeats = 99 },
+		"already stopped": func(record *StopRecord) {
+			record.Policy = Policy{MinRepeats: 2, MaxRepeats: 10, TargetRelHalfWidth: 0.9}
+		},
+		"interval 100.5 ± 0": func(record *StopRecord) {
+			record.Values = []float64{100, 100.5, 99.5}
+			record.HalfWidth = 0
+			record.Mean = 100.5
+		},
+		"recorded reason \"fo":  func(record *StopRecord) { record.Reason = "forged" },
+		"half_width must match": func(record *StopRecord) { record.RelHalfWidth = 0.5 },
+	}
+	for name, mutate := range tampered {
+		record := good
+		record.Values = append([]float64{}, good.Values...)
+		record.DurationsSeconds = append([]float64{}, good.DurationsSeconds...)
+		mutate(&record)
+		if err := record.Verify(); err == nil {
+			t.Fatalf("Verify accepted a record with a changed %s: %+v", name, record)
+		}
+	}
+	failedTooLate := NewStopRecord("m", Failed([]float64{100, 100, 100}), []float64{100, 100, 100}, durationsOf([]float64{1, 1, 1}), Policy{MinRepeats: 3, MaxRepeats: 10, TargetRelHalfWidth: 0.05}, "boom")
+	if err := failedTooLate.Verify(); err == nil || !strings.Contains(err.Error(), "already stopped") {
+		t.Fatalf("Verify(failed after convergence) = %v, want already stopped", err)
+	}
+}

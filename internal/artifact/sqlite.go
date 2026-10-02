@@ -152,6 +152,7 @@ func Check(path string) error {
 		checkSpecKindRows,
 		checkForeignKeys,
 		checkArtifactHashes,
+		checkPointDecisions,
 	} {
 		if err := check(db); err != nil {
 			return err
