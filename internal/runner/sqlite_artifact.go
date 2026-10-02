@@ -379,7 +379,7 @@ func insertWorkloads(tx *sql.Tx, runID string, spec Spec) error {
 			save_detailed, capture_payload_artifacts, dataset_json, request_json, metadata_json
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			dimensionID(runID, workload.Name), runID, workload.Name, workload.Role, workload.Phase, trafficJSON, concurrencyJSON, workloadSampleCount(workload),
-			workload.Repeats, boolToInt(boolValue(workload.BenchmarkTrafficConfig.SaveDetailed)),
+			plannedRepeats(workload), boolToInt(boolValue(workload.BenchmarkTrafficConfig.SaveDetailed)),
 			boolToInt(workload.CapturePayloadArtifacts), structuredWorkloadJSON(workload, workload.Dataset),
 			structuredWorkloadJSON(workload, workload.Request), workloadClaimsJSON(workload)); err != nil {
 			return err

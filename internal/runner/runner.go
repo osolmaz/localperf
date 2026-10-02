@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/osolmaz/localperf/internal/artifact"
+	"github.com/osolmaz/localperf/internal/convergence"
 )
 
 type RunOptions struct {
@@ -96,7 +97,8 @@ type runSession struct {
 	// plan so adopted measurements still import.
 	executionRuns          []PlannedRun
 	processes              map[string]*serverProcess
-	ladderRows             map[string]*ReportRow
+	ladderPoints           map[string]*ladderPoint
+	points                 map[string]*pointState
 	ladderStops            map[string]adaptiveStop
 	reportedMaxConcurrency map[string]float64
 	attestedPoints         map[string]bool
@@ -181,7 +183,8 @@ func initRunSession(ctx context.Context, spec Spec, opts RunOptions) *runSession
 	return &runSession{
 		ctx: ctx, spec: spec, opts: opts, runDir: runDir, summary: summary,
 		processes:              map[string]*serverProcess{},
-		ladderRows:             map[string]*ReportRow{},
+		ladderPoints:           map[string]*ladderPoint{},
+		points:                 map[string]*pointState{},
 		ladderStops:            map[string]adaptiveStop{},
 		reportedMaxConcurrency: map[string]float64{},
 		attestedPoints:         map[string]bool{},
@@ -375,7 +378,7 @@ func (session *runSession) stopAfterWarmupSleepFailure(profile Profile, proc *se
 func (session *runSession) applyAdaptiveSkips(runs []PlannedRun) []PlannedRun {
 	remaining := make([]PlannedRun, 0, len(runs))
 	for _, planned := range runs {
-		if reason := session.adaptiveSkipReason(planned); reason != "" {
+		if reason := session.skipReason(planned); reason != "" {
 			session.skipPlannedRun(planned, reason)
 			continue
 		}
@@ -390,6 +393,12 @@ func (session *runSession) applyAdaptiveSkips(runs []PlannedRun) []PlannedRun {
 func (session *runSession) skipResumedRuns(runs []PlannedRun) []PlannedRun {
 	remaining := make([]PlannedRun, 0, len(runs))
 	for _, planned := range runs {
+		// A point that the resumed samples already stopped keeps its later
+		// samples in the plan, so the skip check records them as skipped.
+		if session.pointSkipReason(planned) != "" {
+			remaining = append(remaining, planned)
+			continue
+		}
 		row, ok := resumableRow(planned)
 		if !ok {
 			remaining = append(remaining, planned)
@@ -397,9 +406,10 @@ func (session *runSession) skipResumedRuns(runs []PlannedRun) []PlannedRun {
 		}
 		session.summary.CompletedRuns++
 		session.summary.Rows = append(session.summary.Rows, *row)
-		// Resumed rows replay the adaptive ladder so stop state from the
-		// previous attempt is not forgotten.
-		session.updateLadder(planned, row)
+		// Resumed rows replay point convergence, and through it the
+		// adaptive ladder, so stop state from the previous attempt is not
+		// forgotten.
+		session.recordPointSample(planned, row)
 		session.events.Write(Event{
 			Timestamp:   time.Now().UTC(),
 			Type:        "workload_resumed",
@@ -438,7 +448,7 @@ func (session *runSession) runProfileWorkloads(profile Profile, proc *serverProc
 }
 
 func (session *runSession) runProfileWorkload(profile Profile, proc *serverProcess, runs []PlannedRun, index int, planned PlannedRun) bool {
-	if reason := session.adaptiveSkipReason(planned); reason != "" {
+	if reason := session.skipReason(planned); reason != "" {
 		session.skipPlannedRun(planned, reason)
 		return false
 	}
@@ -452,6 +462,7 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	result, err := executeBench(session.ctx, session.spec, planned, session.runDir, session.events)
 	if err != nil {
 		session.stopLadder(planned, fmt.Sprintf("concurrency %d failed: %v", planned.Concurrency, err))
+		session.recordPointFailure(planned, err)
 		aborted := session.handleWorkloadError(profile, proc, runs, index, planned, "workload_failed", err)
 		session.writeArtifactSnapshot()
 		return aborted
@@ -460,7 +471,7 @@ func (session *runSession) runProfileWorkload(profile Profile, proc *serverProce
 	if result != nil {
 		session.summary.Rows = append(session.summary.Rows, *result)
 	}
-	session.updateLadder(planned, result)
+	session.recordPointSample(planned, result)
 	session.writeArtifactSnapshot()
 	return false
 }
@@ -948,7 +959,7 @@ func warmupPlannedRun(spec Spec, profile Profile, runDir string) PlannedRun {
 			LoadGenerator:          warmup.LoadGenerator,
 			NumPrompts:             warmup.NumPrompts,
 			MaxConcurrency:         []int{warmup.MaxConcurrency},
-			Repeats:                1,
+			Convergence:            convergence.Fixed(1),
 		},
 		Concurrency: warmup.MaxConcurrency,
 		ResultFile:  ResultPath(runDir, profile.Name, "warmup", warmup.MaxConcurrency),
@@ -1218,7 +1229,7 @@ func executeLoadCommand(ctx context.Context, spec Spec, planned PlannedRun, comm
 
 func benchmarkLogPath(runDir string, planned PlannedRun) string {
 	name := fmt.Sprintf("%s__%s__c%d", Slug(planned.Profile.Name), Slug(planned.Workload.Name), planned.Concurrency)
-	if planned.Workload.Repeats > 1 {
+	if plannedRepeats(planned.Workload) > 1 {
 		name += fmt.Sprintf("__r%d", planned.Repeat+1)
 	}
 	return filepath.Join(runDir, "logs", name+".log")

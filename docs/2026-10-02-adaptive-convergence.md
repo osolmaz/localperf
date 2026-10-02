@@ -28,10 +28,13 @@ only that one mode.
   state, so they are not independent samples. Prompt nonces keep consecutive
   batches cold, so batches are close to independent. See
   [Prompt nonces](2026-09-18-prompt-nonces.md).
-- The **sample value** is the headline throughput that the report already shows
-  for the phase: `Decode tok/s` for decode cases and `Prefill tok/s` for prefill
-  cases. This is the value `phaseThroughput` selects. Decode speed excludes
-  TTFT, as defined in
+- The **sample value** is the throughput that `phaseThroughput` selects, the
+  same value the adaptive ladder already uses. For decode cases it is the
+  aggregate output throughput, `aggregate_output_tok_s`, which is the headline
+  `Decode tok/s`: total generated output tokens divided by measurement wall
+  time. For prefill cases it is the aggregate total throughput,
+  `aggregate_total_tok_s`. Both values are stored on every `measurements` row.
+  The headline decode value includes TTFT, as defined in
   [Full-run timing and prefill](2026-07-31-full-run-timing-and-prefill.md).
 
 ## Stopping rule
@@ -212,33 +215,39 @@ It behaves exactly like the removed `repeats` field.
 
 Convergence decides how many samples a point gets. The output length decides
 what one sample measures. They stay separate settings, and output length stays
-a fixed value for each case.
+a fixed value for each case. The output length does not adapt inside a request:
+tokens in one request are correlated, and the context would change during the
+measurement.
 
-The built-in decode cases change from 1024 to 256 output tokens:
+This change keeps the built-in decode cases at 1024 output tokens.
 
-- **Precision now comes from samples.** With TTFT excluded, 255 token gaps give
-  a stable decode speed for one request, and convergence adds samples where the
-  value is noisy.
-- **The context label gets more exact.** A decode case fills the context to
-  `target - output` and then decodes up to the target. With 1024 tokens the 4k
-  point decodes from about 3k to 4k context. With 256 tokens it decodes from
-  about 3.75k to 4k.
-- **Long-context points get faster.** At 64k context and 6 tokens per second,
-  one request decodes in about 43 seconds instead of about 170 seconds.
+### Open decision: a shorter output
 
-The output length does not adapt inside a request. Tokens in one request are
-correlated, so an adaptive length would need batch-means statistics, and the
-context would change during the measurement. A fixed length also keeps two
-models and two runs on the same context range.
+A shorter output, for example 256 tokens, makes long-context points faster and
+puts the decode range closer to the context label. It is not a free change:
 
-Prefill cases keep 1 output token.
+- The headline `Decode tok/s` divides output tokens by wall time, and the wall
+  time includes TTFT. With a shorter output, prefill takes a larger share of
+  the wall time, so the headline decode value at long context drops because of
+  the change itself, not because the model got slower.
+- A TTFT-free decode rate exists as TPOT detail, but the established headline
+  definitions forbid a new headline column.
+
+Changing the output length therefore needs one of these decisions first: accept
+the different headline meaning under a new suite version, or change the decode
+headline definition in
+[Full-run timing and prefill](2026-07-31-full-run-timing-and-prefill.md).
 
 ## Suite version and old results
 
-A 256-token row and a 1024-token row are different measurements. The change
-raises the suite `Version` from `1` to `2`, and the report shows the output
-length in the case shape, so results from the two contracts are never compared
-as if they were the same. Old artifacts stay readable.
+The suite format changes, because `repeats` becomes `convergence`. The change
+raises the suite version from `1` to `2`. Deployment files and runner specs keep
+version `1`. A suite file with version `1` or a `repeats` field fails to load
+with a clear error. A runner spec whose workload still has `repeats` also fails
+to load, so an old spec never runs silently with a different repeat count.
+
+Old artifacts stay readable. The `workloads.repeats` column keeps its name and
+now stores `max_repeats`, the planned upper bound.
 
 [Built-in inference suites](2026-07-02-default-inference-sweep.md) and
 [Practical c1/c6 64k](2026-07-31-practical-c1-c6-64k.md) must be updated in the
