@@ -77,7 +77,7 @@ reuses the cache: on the Prism fork, a restored 4,000-token cache answered a
 - The file name is a hash of everything that changes the saved state: the
   model, the model file, the deployment's model revision, the runtime command,
   version, and digest, the KV cache types, flash attention, the per-slot
-  context, and the base prompt. A later run of the same case on the same
+  context, the extra server arguments, and the base prompt. A later run of the same case on the same
   deployment reuses the file and skips the prime; any change primes a new one.
 
 ## Evidence
@@ -91,7 +91,9 @@ and the restored token count. Every request records its cached prompt tokens.
 - The `Decode tok/s` of a restored case is decode speed from a full context.
   TTFT still includes the few prefilled tokens and the time to the first
   token.
-- A restored case never derives effective prefill. Its prefill columns come
+- A restored case never derives effective prefill, and the artifact stores no
+  effective-prefill metric for a measurement whose requests report cached
+  prompt tokens. Its prefill columns come
   from a dedicated prefill case with the same context target and concurrency,
   or show `-`.
 - Restored and cold samples of the same case never pool as repeats. A restored

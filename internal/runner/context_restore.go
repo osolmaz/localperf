@@ -62,7 +62,7 @@ func restoredBasePrompt(workload Workload) string {
 
 // restoredSnapshotFile names the snapshot by everything that changes its
 // contents: the immutable model revision, the runtime build, the settings
-// that shape the KV state, and the base prompt. A later run of the same case
+// and extra server arguments that shape the KV state, and the base prompt. A later run of the same case
 // on the same deployment reuses it; any change primes a new one.
 func restoredSnapshotFile(engine EngineConfig, profile Profile, basePrompt string) string {
 	settings := LlamaCppSettings{}
@@ -73,7 +73,7 @@ func restoredSnapshotFile(engine EngineConfig, profile Profile, basePrompt strin
 		profile.Model, settings.ModelFile, metadataString(engine.Metadata, "model_revision"),
 		engine.Command, metadataString(engine.Metadata, "runtime_version_requested"), metadataString(engine.Metadata, "runtime_digest"),
 		settings.CacheTypeK, settings.CacheTypeV, settings.FlashAttn, strconv.Itoa(profile.MaxModelLen),
-		sha256Hex([]byte(basePrompt)),
+		strings.Join(profileExtraArgs(profile), " "), sha256Hex([]byte(basePrompt)),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(key))
 	return "localperf-" + hex.EncodeToString(sum[:8]) + ".bin"
