@@ -1,7 +1,7 @@
 # localperf
 
 <p align="center">
-  <img src="assets/cover.svg" alt="localperf: a benchmark CLI for local LLM inference that keeps every run in one SQLite file" width="880">
+  <img src="assets/cover.svg" alt="localperf: a benchmark CLI for local LLM inference that keeps every run in one SQLite file. The practical-64k grid shows decode tokens per second with the context empty and full, at 1 and 6 users." width="880">
 </p>
 
 localperf is a benchmark CLI for local LLM inference. It runs a named
