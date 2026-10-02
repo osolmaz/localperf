@@ -144,7 +144,7 @@ contracts live in `2026-07-02-default-inference-sweep.md`.
 
 Implemented:
 
-1. Spec fields and validation in `internal/vllmbench/config.go`
+1. Spec fields and validation in `internal/runner/config.go`
    (`validateWorkloadContextSemantics`).
 2. Report labeling rules in `internal/report/html.go`
    (`applyContextLabel`).

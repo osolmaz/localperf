@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/osolmaz/localperf/internal/vllmbench"
+	"github.com/osolmaz/localperf/internal/runner"
 )
 
 func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
@@ -18,8 +18,8 @@ func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := vllmbench.BuildPlan(compiled.Spec, t.TempDir())
-	if compiled.Spec.Provenance != vllmbench.SpecProvenanceGenerated || vllmbench.SpecProvenance(compiled.Spec) != vllmbench.SpecProvenanceGenerated || compiled.Spec.Generator == nil || compiled.Spec.Generator.Tool != "localperf-suite" {
+	plan := runner.BuildPlan(compiled.Spec, t.TempDir())
+	if compiled.Spec.Provenance != runner.SpecProvenanceGenerated || runner.SpecProvenance(compiled.Spec) != runner.SpecProvenanceGenerated || compiled.Spec.Generator == nil || compiled.Spec.Generator.Tool != "localperf-suite" {
 		t.Fatalf("compiled provenance = %q / %+v", compiled.Spec.Provenance, compiled.Spec.Generator)
 	}
 	if len(plan) != 12 {
@@ -58,14 +58,14 @@ func TestBuiltinActiveCasesLeaveTemplateHeadroom(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, benchmarkCase := range suite.Cases {
-			if benchmarkCase.ContextSemantics != vllmbench.ContextSemanticsActive {
+			if benchmarkCase.ContextSemantics != runner.ContextSemanticsActive {
 				continue
 			}
 			requested := benchmarkCase.InputTokens + benchmarkCase.OutputTokens
 			if requested >= benchmarkCase.ContextTarget {
 				t.Fatalf("%s/%s requests %d tokens against limit %d", name, benchmarkCase.Name, requested, benchmarkCase.ContextTarget)
 			}
-			if float64(requested) < vllmbench.ContextTargetMinFrac*float64(benchmarkCase.ContextTarget) {
+			if float64(requested) < runner.ContextTargetMinFrac*float64(benchmarkCase.ContextTarget) {
 				t.Fatalf("%s/%s requests %d tokens below active-context band for %d", name, benchmarkCase.Name, requested, benchmarkCase.ContextTarget)
 			}
 		}
@@ -78,7 +78,7 @@ func TestSelectionUsesCaseAndConcurrencyTerms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := vllmbench.BuildPlan(compiled.Spec, t.TempDir())
+	plan := runner.BuildPlan(compiled.Spec, t.TempDir())
 	if len(plan) != 3 {
 		t.Fatalf("planned measurements = %d, want 3", len(plan))
 	}
@@ -97,7 +97,7 @@ func TestExternalHTTPDeploymentDoesNotRequireVLLMCLIWarmup(t *testing.T) {
 	deployment.Runtime.BenchCommand = ""
 	deployment.Runtime.Port = 0
 	deployment.Runtime.EndpointBaseURL = "https://api.example.com/v1"
-	deployment.Client.LoadGenerator = vllmbench.LoadGeneratorHTTP
+	deployment.Client.LoadGenerator = runner.LoadGeneratorHTTP
 	compiled, err := Compile(suite, deployment, Selection{Cases: []string{"generate-empty"}, Concurrencies: []int{1}})
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +105,7 @@ func TestExternalHTTPDeploymentDoesNotRequireVLLMCLIWarmup(t *testing.T) {
 	if compiled.Spec.Warmup.Enabled {
 		t.Fatal("external HTTP deployment retained the vLLM CLI warmup")
 	}
-	if err := vllmbench.ValidateSpec(compiled.Spec); err != nil {
+	if err := runner.ValidateSpec(compiled.Spec); err != nil {
 		t.Fatalf("compiled external HTTP deployment: %v", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestHTTPDeploymentRejectsIgnoredCLIClientOptions(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			deployment := testDeployment()
-			deployment.Client.LoadGenerator = vllmbench.LoadGeneratorHTTP
+			deployment.Client.LoadGenerator = runner.LoadGeneratorHTTP
 			mutate(&deployment)
 			if _, err := Compile(suite, deployment, Selection{}); err == nil || !strings.Contains(err.Error(), "unsupported with localperf_http") {
 				t.Fatalf("Compile error = %v", err)
@@ -203,8 +203,8 @@ func TestSuiteProvenanceHashesPersistedRedactedExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	persisted := vllmbench.RedactedSpec(compiled.Spec)
-	if got := vllmbench.SpecProvenance(persisted); got != vllmbench.SpecProvenanceGenerated {
+	persisted := runner.RedactedSpec(compiled.Spec)
+	if got := runner.SpecProvenance(persisted); got != runner.SpecProvenanceGenerated {
 		t.Fatalf("redacted execution provenance = %q, want generated", got)
 	}
 }

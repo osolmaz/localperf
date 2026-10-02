@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/osolmaz/localperf/internal/artifact"
-	"github.com/osolmaz/localperf/internal/vllmbench"
+	"github.com/osolmaz/localperf/internal/runner"
 )
 
 const Version = "1"
@@ -34,18 +34,18 @@ type Warmup struct {
 }
 
 type Case struct {
-	Name             string            `json:"name"`
-	Role             string            `json:"role"`
-	Phase            string            `json:"phase"`
-	InputTokens      int               `json:"input_tokens"`
-	OutputTokens     int               `json:"output_tokens"`
-	ContextTarget    int               `json:"context_target"`
-	ContextSemantics string            `json:"context_semantics"`
-	Batches          []vllmbench.Batch `json:"batches"`
-	Repeats          int               `json:"repeats"`
-	Temperature      float64           `json:"temperature"`
-	IgnoreEOS        bool              `json:"ignore_eos"`
-	PromptNonce      *bool             `json:"prompt_nonce,omitempty"`
+	Name             string         `json:"name"`
+	Role             string         `json:"role"`
+	Phase            string         `json:"phase"`
+	InputTokens      int            `json:"input_tokens"`
+	OutputTokens     int            `json:"output_tokens"`
+	ContextTarget    int            `json:"context_target"`
+	ContextSemantics string         `json:"context_semantics"`
+	Batches          []runner.Batch `json:"batches"`
+	Repeats          int            `json:"repeats"`
+	Temperature      float64        `json:"temperature"`
+	IgnoreEOS        bool           `json:"ignore_eos"`
+	PromptNonce      *bool          `json:"prompt_nonce,omitempty"`
 }
 
 type Deployment struct {
@@ -113,7 +113,7 @@ type Selection struct {
 type Compiled struct {
 	Suite      Suite
 	Deployment Deployment
-	Spec       vllmbench.Spec
+	Spec       runner.Spec
 }
 
 func LoadSuite(nameOrPath string) (Suite, error) {
@@ -163,7 +163,7 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		return Compiled{}, err
 	}
 	profileName := deployment.Name
-	engine := vllmbench.EngineConfig{
+	engine := runner.EngineConfig{
 		Name: deployment.Runtime.Name, Type: deployment.Runtime.Type,
 		Command: deployment.Runtime.Command, BenchCommand: deployment.Runtime.BenchCommand,
 		Env: deployment.Runtime.Env,
@@ -179,11 +179,11 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 	}
 	managed := deployment.Runtime.Managed
 	engine.Managed = &managed
-	profile := vllmbench.Profile{
+	profile := runner.Profile{
 		Name: profileName, Engine: engine.Name, Model: deployment.Model,
 		Host: defaultString(deployment.Runtime.Host, "127.0.0.1"), Port: deployment.Runtime.Port,
 		EndpointBaseURL: deployment.Runtime.EndpointBaseURL, Managed: managed,
-		HealthPath:  defaultString(deployment.Runtime.HealthPath, vllmbench.DefaultHealthPath),
+		HealthPath:  defaultString(deployment.Runtime.HealthPath, runner.DefaultHealthPath),
 		Env:         deployment.Runtime.Env,
 		MaxModelLen: maxContext, MaxNumSeqs: maxConcurrency,
 		MaxNumBatchedTokens:  deployment.Server.MaxNumBatchedTokens,
@@ -197,14 +197,14 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 	adaptive := false
 	appendTimestamp := true
 	stopManaged := true
-	spec := vllmbench.Spec{
+	spec := runner.Spec{
 		Version:     Version,
 		Name:        deployment.Name + "-" + suite.Name,
 		Description: suite.Description,
 		Model:       deployment.Model,
-		Engines:     []vllmbench.EngineConfig{engine},
-		Runner:      vllmbench.RunnerConfig{StopManagedOnExit: &stopManaged, AppendTimestampToRun: &appendTimestamp, Adaptive: vllmbench.AdaptiveConfig{Enabled: &adaptive}},
-		Safety: vllmbench.SafetyConfig{
+		Engines:     []runner.EngineConfig{engine},
+		Runner:      runner.RunnerConfig{StopManagedOnExit: &stopManaged, AppendTimestampToRun: &appendTimestamp, Adaptive: runner.AdaptiveConfig{Enabled: &adaptive}},
+		Safety: runner.SafetyConfig{
 			MinMemAvailableGiB: deployment.Safety.MinMemAvailableGiB,
 			PollIntervalMillis: deployment.Safety.PollIntervalMillis,
 			StartupTimeoutSec:  deployment.Safety.StartupTimeoutSec,
@@ -212,10 +212,10 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 			HTTPTimeoutSec:     deployment.Safety.HTTPTimeoutSec,
 		},
 		Warmup:    compileWarmup(suite.Warmup, deployment.Client),
-		Profiles:  []vllmbench.Profile{profile},
+		Profiles:  []runner.Profile{profile},
 		Workloads: compileCases(cases, profileName, deployment.Client),
 	}
-	vllmbench.ApplyDefaults(&spec)
+	runner.ApplyDefaults(&spec)
 	intent, err := json.Marshal(map[string]any{"suite": suite.Name})
 	if err != nil {
 		return Compiled{}, err
@@ -223,13 +223,13 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 	spec.Generator = &artifact.GeneratorStamp{Tool: "localperf-suite", Version: Version, Intent: intent}
 	// Artifacts persist the redacted execution document. Hash that exact form
 	// so credentials never affect provenance and the stored bytes verify.
-	hash, err := vllmbench.SpecContentHash(vllmbench.RedactedSpec(spec))
+	hash, err := runner.SpecContentHash(runner.RedactedSpec(spec))
 	if err != nil {
 		return Compiled{}, err
 	}
 	spec.Generator.ContentHash = hash
-	spec.Provenance = vllmbench.SpecProvenanceGenerated
-	if err := vllmbench.ValidateSpec(spec); err != nil {
+	spec.Provenance = runner.SpecProvenanceGenerated
+	if err := runner.ValidateSpec(spec); err != nil {
 		return Compiled{}, fmt.Errorf("compiled execution is invalid: %w", err)
 	}
 	resolvedSuite := suite
@@ -241,7 +241,7 @@ func WriteExecutionFiles(runDir string, compiled Compiled) error {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return err
 	}
-	plan := vllmbench.BuildPlan(vllmbench.RedactedSpec(compiled.Spec), runDir)
+	plan := runner.BuildPlan(runner.RedactedSpec(compiled.Spec), runDir)
 	files := []struct {
 		name  string
 		value any
@@ -259,7 +259,7 @@ func WriteExecutionFiles(runDir string, compiled Compiled) error {
 }
 
 func VerifyExecutionFiles(runDir string, compiled Compiled) error {
-	plan := vllmbench.BuildPlan(vllmbench.RedactedSpec(compiled.Spec), runDir)
+	plan := runner.BuildPlan(runner.RedactedSpec(compiled.Spec), runDir)
 	files := []struct {
 		name  string
 		value any
@@ -304,30 +304,30 @@ func builtinSuite(name string) (Suite, bool) {
 func practicalSuite() Suite {
 	fullBudget := activeTokenBudget(65536)
 	return Suite{Version: Version, Name: "practical-64k", Description: "Generation at minimal and near-full 64k context; every point reports decode and effective prefill.", Warmup: defaultWarmup(), Cases: []Case{
-		benchmarkCase("generate-empty", "decode", 1, 1024, 65536, vllmbench.ContextSemanticsCapacity, []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
-		benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, vllmbench.ContextSemanticsActive, []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
+		benchmarkCase("generate-empty", "decode", 1, 1024, 65536, runner.ContextSemanticsCapacity, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
+		benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, runner.ContextSemanticsActive, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
 	}}
 }
 
 func throughputSuite() Suite {
 	budget := activeTokenBudget(4096)
 	return Suite{Version: Version, Name: "throughput-4k", Description: "4k generation throughput at an explicit concurrency ladder.", Warmup: defaultWarmup(), Cases: []Case{
-		benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, vllmbench.ContextSemanticsActive, standardBatches(), 3),
+		benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, runner.ContextSemanticsActive, standardBatches(), 3),
 	}}
 }
 
 func contextSuite() Suite {
 	suite := Suite{Version: Version, Name: "context-ladder", Description: "Explicit prefill and decode cases across the active-context ladder.", Warmup: defaultWarmup()}
 	for _, context := range []int{4096, 8192, 16384, 32768, 65536, 131072} {
-		label := vllmbench.TokenCountLabel(context)
+		label := runner.TokenCountLabel(context)
 		batches := standardBatches()
 		if context >= 131072 {
-			batches = []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}}
+			batches = []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}}
 		}
 		budget := activeTokenBudget(context)
 		suite.Cases = append(suite.Cases,
-			benchmarkCase("prefill-"+label, "prefill", budget-1, 1, context, vllmbench.ContextSemanticsActive, batches, 1),
-			benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, vllmbench.ContextSemanticsActive, batches, 1),
+			benchmarkCase("prefill-"+label, "prefill", budget-1, 1, context, runner.ContextSemanticsActive, batches, 1),
+			benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, runner.ContextSemanticsActive, batches, 1),
 		)
 	}
 	return suite
@@ -348,31 +348,31 @@ func defaultWarmup() Warmup {
 	return Warmup{Enabled: true, InputTokens: 16, OutputTokens: 16, Requests: 4, Concurrency: 1}
 }
 
-func standardBatches() []vllmbench.Batch {
-	return []vllmbench.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}, {Concurrency: 8, Requests: 8}, {Concurrency: 16, Requests: 16}, {Concurrency: 32, Requests: 32}}
+func standardBatches() []runner.Batch {
+	return []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}, {Concurrency: 8, Requests: 8}, {Concurrency: 16, Requests: 16}, {Concurrency: 32, Requests: 32}}
 }
 
-func benchmarkCase(name, phase string, input, output, target int, semantics string, batches []vllmbench.Batch, repeats int) Case {
-	return Case{Name: name, Role: vllmbench.WorkloadRoleBenchmark, Phase: phase, InputTokens: input, OutputTokens: output, ContextTarget: target, ContextSemantics: semantics, Batches: batches, Repeats: repeats, Temperature: 0, IgnoreEOS: true}
+func benchmarkCase(name, phase string, input, output, target int, semantics string, batches []runner.Batch, repeats int) Case {
+	return Case{Name: name, Role: runner.WorkloadRoleBenchmark, Phase: phase, InputTokens: input, OutputTokens: output, ContextTarget: target, ContextSemantics: semantics, Batches: batches, Repeats: repeats, Temperature: 0, IgnoreEOS: true}
 }
 
-func compileWarmup(warmup Warmup, client Client) vllmbench.WarmupConfig {
-	if defaultString(client.LoadGenerator, vllmbench.LoadGeneratorVLLMBench) == vllmbench.LoadGeneratorHTTP {
-		return vllmbench.WarmupConfig{Enabled: false}
+func compileWarmup(warmup Warmup, client Client) runner.WarmupConfig {
+	if defaultString(client.LoadGenerator, runner.LoadGeneratorVLLMBench) == runner.LoadGeneratorHTTP {
+		return runner.WarmupConfig{Enabled: false}
 	}
-	return vllmbench.WarmupConfig{Enabled: warmup.Enabled, NumPrompts: warmup.Requests, MaxConcurrency: warmup.Concurrency, BenchmarkTrafficConfig: traffic(client, warmup.InputTokens, warmup.OutputTokens, false)}
+	return runner.WarmupConfig{Enabled: warmup.Enabled, NumPrompts: warmup.Requests, MaxConcurrency: warmup.Concurrency, BenchmarkTrafficConfig: traffic(client, warmup.InputTokens, warmup.OutputTokens, false)}
 }
 
-func compileCases(cases []Case, profile string, client Client) []vllmbench.Workload {
-	workloads := make([]vllmbench.Workload, 0, len(cases))
+func compileCases(cases []Case, profile string, client Client) []runner.Workload {
+	workloads := make([]runner.Workload, 0, len(cases))
 	for _, item := range cases {
 		temperature := item.Temperature
-		workloads = append(workloads, vllmbench.Workload{
+		workloads = append(workloads, runner.Workload{
 			BenchmarkTrafficConfig: traffic(client, item.InputTokens, item.OutputTokens, true),
 			Name:                   item.Name, Role: item.Role, Phase: item.Phase,
 			ContextTarget: item.ContextTarget, ContextSemantics: item.ContextSemantics,
-			LoadGenerator: defaultString(client.LoadGenerator, vllmbench.LoadGeneratorVLLMBench),
-			Profiles:      []string{profile}, Batches: append([]vllmbench.Batch(nil), item.Batches...),
+			LoadGenerator: defaultString(client.LoadGenerator, runner.LoadGeneratorVLLMBench),
+			Profiles:      []string{profile}, Batches: append([]runner.Batch(nil), item.Batches...),
 			Repeats: item.Repeats, IgnoreEOS: item.IgnoreEOS, Temperature: &temperature,
 			PromptNonce: item.PromptNonce,
 		})
@@ -380,12 +380,12 @@ func compileCases(cases []Case, profile string, client Client) []vllmbench.Workl
 	return workloads
 }
 
-func traffic(client Client, input, output int, detailed bool) vllmbench.BenchmarkTrafficConfig {
+func traffic(client Client, input, output int, detailed bool) runner.BenchmarkTrafficConfig {
 	extra := append([]string(nil), client.ExtraArgs...)
 	if strings.TrimSpace(client.Tokenizer) != "" {
 		extra = append(extra, "--tokenizer", client.Tokenizer)
 	}
-	return vllmbench.BenchmarkTrafficConfig{
+	return runner.BenchmarkTrafficConfig{
 		Backend: defaultString(client.Backend, "openai-chat"), Endpoint: client.Endpoint,
 		DatasetName: "random", RequestRate: "inf", RandomInputLen: input,
 		RandomOutputLen: output, RandomRangeRatio: "0", SaveDetailed: boolPointer(detailed), ExtraArgs: extra,
@@ -503,7 +503,7 @@ func validateDeployment(deployment Deployment) error {
 	if deployment.Safety.MinMemAvailableGiB <= 0 {
 		issues = append(issues, "safety.min_mem_available_gib must be positive")
 	}
-	if defaultString(deployment.Client.LoadGenerator, vllmbench.LoadGeneratorVLLMBench) == vllmbench.LoadGeneratorHTTP && (strings.TrimSpace(deployment.Client.Tokenizer) != "" || len(deployment.Client.ExtraArgs) > 0) {
+	if defaultString(deployment.Client.LoadGenerator, runner.LoadGeneratorVLLMBench) == runner.LoadGeneratorHTTP && (strings.TrimSpace(deployment.Client.Tokenizer) != "" || len(deployment.Client.ExtraArgs) > 0) {
 		issues = append(issues, "client.tokenizer and client.extra_args are unsupported with localperf_http")
 	}
 	if len(issues) > 0 {
