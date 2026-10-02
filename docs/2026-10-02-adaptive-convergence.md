@@ -89,9 +89,9 @@ A suite case replaces `repeats` with `convergence`:
 ```json
 "convergence": {
   "min_repeats": 3,
-  "max_repeats": 8,
-  "target_rel_half_width": 0.03,
-  "max_point_seconds": 900
+  "max_repeats": 10,
+  "target_rel_half_width": 0.05,
+  "max_point_seconds": 600
 }
 ```
 
@@ -162,29 +162,56 @@ the rule compares means as it does today.
 - `internal/report` and `internal/artifact`: the interval display, the marker,
   and the `artifact check` recomputation.
 
-## Built-in suites
+## Defaults
 
-| Suite            | Proposed policy                                                  |
-| ---------------- | ---------------------------------------------------------------- |
-| `practical-64k`  | `min 3`, `max 8`, `target 0.03`, `max_point_seconds 900`         |
-| `throughput-4k`  | `min 3`, `max 8`, `target 0.03`, `max_point_seconds 600`         |
-| `context-ladder` | `min 3`, `max 6`, `target 0.05`, `max_point_seconds 900`         |
+All built-in suites use one policy:
 
-These values are proposals. Onur sets the final values before the suites change.
-[Built-in inference suites](2026-07-02-default-inference-sweep.md) must be
-updated in the same change.
+| Setting                 | Default | Reason                                                                                                                                    |
+| ----------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `min_repeats`           | 3       | With 2 samples `t(1) = 12.706`, so the interval is too wide to be useful. Three is the smallest useful count.                            |
+| `max_repeats`           | 10      | A point that does not converge in 10 samples has a real noise problem. More samples hide it; the report marks it instead.                |
+| `target_rel_half_width` | 0.05    | Smaller differences are ties under practical significance. At about 2% sample noise, ±5% converges at 3 samples, and ±3% needs about 5. |
+| `max_point_seconds`     | 600     | Keeps slow long-context points bounded. A point that reaches the limit is marked.                                                        |
 
-## Open decision: decode output length
+A suite tightens the target only when a decision needs a smaller difference.
+A fixed count stays available with `min_repeats == max_repeats` and no target.
+It behaves exactly like the removed `repeats` field.
 
-Convergence decides how many samples a point gets. It does not decide how long
-each request generates. Decode cases now generate 1024 tokens. At 64k context on
-a slow model that is several minutes per request.
+## Decode output length
 
-With TTFT excluded from decode speed, a shorter output, for example 256 tokens,
-probably gives a sample value of the same quality, and convergence then adds
-samples where the value is noisy. Changing the output length changes the
-contract of `practical-64k` and `context-ladder`, so it is a separate decision.
-Make it before the built-in suite policies above are finalized.
+Convergence decides how many samples a point gets. The output length decides
+what one sample measures. They stay separate settings, and output length stays
+a fixed value for each case.
+
+The built-in decode cases change from 1024 to 256 output tokens:
+
+- **Precision now comes from samples.** With TTFT excluded, 255 token gaps give
+  a stable decode speed for one request, and convergence adds samples where the
+  value is noisy.
+- **The context label gets more exact.** A decode case fills the context to
+  `target - output` and then decodes up to the target. With 1024 tokens the 4k
+  point decodes from about 3k to 4k context. With 256 tokens it decodes from
+  about 3.75k to 4k.
+- **Long-context points get faster.** At 64k context and 6 tokens per second,
+  one request decodes in about 43 seconds instead of about 170 seconds.
+
+The output length does not adapt inside a request. Tokens in one request are
+correlated, so an adaptive length would need batch-means statistics, and the
+context would change during the measurement. A fixed length also keeps two
+models and two runs on the same context range.
+
+Prefill cases keep 1 output token.
+
+## Suite version and old results
+
+A 256-token row and a 1024-token row are different measurements. The change
+raises the suite `Version` from `1` to `2`, and the report shows the output
+length in the case shape, so results from the two contracts are never compared
+as if they were the same. Old artifacts stay readable.
+
+[Built-in inference suites](2026-07-02-default-inference-sweep.md) and
+[Practical c1/c6 64k](2026-07-31-practical-c1-c6-64k.md) must be updated in the
+same change.
 
 ## Validation
 
