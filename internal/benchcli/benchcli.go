@@ -90,7 +90,7 @@ func runBench(args []string) {
 	runDir := flags.String("run-dir", "", "optional run directory")
 	artifactPath := flags.String("artifact", "", "optional artifact path; an existing artifact is appended to (model-level accumulation)")
 	resume := flags.Bool("resume", false, "skip planned runs whose result files already completed; requires --run-dir of the previous attempt")
-	dryRun := flags.Bool("dry-run", false, "write planned artifacts without launching vLLM or benchmark commands")
+	dryRun := flags.Bool("dry-run", false, "write the execution plan without starting a server or sending requests")
 	timeout := flags.Duration("timeout", 0, "optional overall timeout, for example 2h")
 	var cases stringList
 	var concurrencies intList
