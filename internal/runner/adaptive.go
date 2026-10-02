@@ -84,29 +84,33 @@ func (session *runSession) stopLadder(planned PlannedRun, reason string) {
 }
 
 // ladderStopReason applies the pure stop rules: the TTFT p99 ceiling and a
-// throughput plateau against the previous concurrency. A gain counts only
-// when it reaches the minimum and, when both points have an interval, the
-// current lower bound is above the previous upper bound; overlapping
-// intervals are a tie.
+// throughput plateau against the previous concurrency.
 func ladderStopReason(config AdaptiveConfig, previous, current *ladderPoint) string {
 	if config.TTFTP99CeilingMillis > 0 && current.p99TTFT > config.TTFTP99CeilingMillis {
 		return fmt.Sprintf("TTFT p99 %.0fms exceeded the %.0fms ceiling at concurrency %d", current.p99TTFT, config.TTFTP99CeilingMillis, current.concurrency)
 	}
-	if config.MinThroughputGainPct <= 0 || previous == nil || previous.concurrency >= current.concurrency {
+	if config.MinThroughputGainPct <= 0 || previous == nil || previous.concurrency >= current.concurrency || previous.throughput.Mean <= 0 {
 		return ""
 	}
-	previousRate := previous.throughput.Mean
-	if previousRate <= 0 {
-		return ""
+	return plateauReason(config.MinThroughputGainPct, previous, current)
+}
+
+// plateauReason stops the ladder when the gain is below the minimum or, when
+// both points have an interval, when the current lower bound is not above
+// the previous upper bound: overlapping intervals are a tie.
+func plateauReason(minGainPct float64, previous, current *ladderPoint) string {
+	gain := (current.throughput.Mean - previous.throughput.Mean) / previous.throughput.Mean * 100
+	if gain < minGainPct {
+		return fmt.Sprintf("throughput gained %.1f%% (< %.0f%%) from concurrency %d to %d", gain, minGainPct, previous.concurrency, current.concurrency)
 	}
-	gain := (current.throughput.Mean - previousRate) / previousRate * 100
-	if gain < config.MinThroughputGainPct {
-		return fmt.Sprintf("throughput gained %.1f%% (< %.0f%%) from concurrency %d to %d", gain, config.MinThroughputGainPct, previous.concurrency, current.concurrency)
-	}
-	if previous.throughput.Known && current.throughput.Known && current.throughput.Low() <= previous.throughput.High() {
+	if intervalsOverlap(previous.throughput, current.throughput) {
 		return fmt.Sprintf("throughput gain %.1f%% from concurrency %d to %d is inside the 95%% intervals", gain, previous.concurrency, current.concurrency)
 	}
 	return ""
+}
+
+func intervalsOverlap(previous, current convergence.Interval) bool {
+	return previous.Known && current.Known && current.Low() <= previous.High()
 }
 
 // phaseThroughput picks the throughput that the phase actually measures:

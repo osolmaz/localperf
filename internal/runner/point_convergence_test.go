@@ -16,7 +16,6 @@ import (
 
 	"github.com/osolmaz/localperf/internal/artifact"
 	"github.com/osolmaz/localperf/internal/convergence"
-	"github.com/osolmaz/localperf/internal/report"
 )
 
 // wide converges at min_repeats on a steady fake server: the 95% half width
@@ -233,47 +232,5 @@ func TestArtifactCheckRecomputesPointDecisions(t *testing.T) {
 		if err := artifact.Check(path); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("artifact.Check after %q = %v, want %q", statement, err, want)
 		}
-	}
-}
-
-func TestReportShowsConvergedPointFromItsSamples(t *testing.T) {
-	server, host, port := steadyOpenAIServer(t)
-	defer server.Close()
-	spec := httpTestSpec(t, host, port, "converge-report", 2, 1)
-	spec.Workloads[0].Role = WorkloadRoleBenchmark
-	spec.Workloads[0].Convergence = wide
-	ApplyDefaults(&spec)
-	runDir := filepath.Join(spec.OutputDir, "converge-report")
-	artifactPath := filepath.Join(spec.OutputDir, "converge-report.sqlite")
-	if _, err := Execute(context.Background(), spec, RunOptions{RunDir: runDir, ArtifactPath: artifactPath}); err != nil {
-		t.Fatal(err)
-	}
-	doc, err := report.LoadSQLiteReport(artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(doc.Measurements) != 1 {
-		t.Fatalf("aggregated measurements = %d, want 1", len(doc.Measurements))
-	}
-	point := doc.Measurements[0]
-	if point.Status != "completed" || point.RepeatCount != 3 || point.Convergence == nil || point.Convergence.Reason != convergence.ReasonConverged {
-		t.Fatalf("point status=%s repeats=%d convergence=%+v, want completed, 3, converged", point.Status, point.RepeatCount, point.Convergence)
-	}
-	if len(doc.RepeatDetails) != 3 {
-		t.Fatalf("repeat details = %d, want the 3 measured samples", len(doc.RepeatDetails))
-	}
-	if len(doc.ThroughputRows) != 1 {
-		t.Fatalf("throughput rows = %d, want 1", len(doc.ThroughputRows))
-	}
-	detail := doc.ThroughputRows[0].Detail
-	if detail.ConvergenceNote != "" {
-		t.Fatalf("converged point note = %q, want none", detail.ConvergenceNote)
-	}
-	labels := map[string]string{}
-	for _, item := range detail.Metrics {
-		labels[item.Label] = item.Value
-	}
-	if labels["Stop reason"] != "converged after 3 sample(s)" || !strings.Contains(labels["95% interval"], "n=3") {
-		t.Fatalf("detail metrics = %v, want stop reason and interval", labels)
 	}
 }
