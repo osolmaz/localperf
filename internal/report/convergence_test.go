@@ -176,3 +176,32 @@ func TestReportMarksUnconvergedPoint(t *testing.T) {
 		t.Fatalf("report lacks the not-converged marker:\n%s", html)
 	}
 }
+
+func TestRepeatsPoolOnlyWithinOneContextPreparation(t *testing.T) {
+	cold := SQLiteReportMeasurement{Profile: "p", Workload: "generate-full", Phase: "decode", Concurrency: 1, Status: "completed"}
+	restored := cold
+	restored.ContextPreparation = contextPreparationRestored
+	aggregated, _ := aggregateRepeatMeasurements([]SQLiteReportMeasurement{cold, restored, restored})
+	if len(aggregated) != 2 {
+		t.Fatalf("aggregated rows = %d, want cold and restored apart", len(aggregated))
+	}
+	if !strings.HasSuffix(throughputRowShape(SQLiteReportMeasurement{ContextPreparation: contextPreparationRestored, PromptTokensValue: 10, PromptTokensKnown: true, CompletionTokensValue: 4, CompletionTokensKnown: true, CompletedRequests: 1}), "· restored context") {
+		t.Fatal("a restored row's shape must say so")
+	}
+}
+
+func TestPooledRepeatsKeepOnlyASharedDecision(t *testing.T) {
+	first := &convergence.StopRecord{Reason: convergence.ReasonConverged, N: 2}
+	second := &convergence.StopRecord{Reason: convergence.ReasonConverged, N: 2}
+	member := SQLiteReportMeasurement{Profile: "p", Workload: "w", Phase: "decode", Concurrency: 1, Status: "completed", Convergence: first}
+	same, _ := aggregateRepeatMeasurements([]SQLiteReportMeasurement{member, member})
+	if same[0].Convergence != first {
+		t.Fatal("repeats of one decision must keep it")
+	}
+	other := member
+	other.Convergence = second
+	mixed, _ := aggregateRepeatMeasurements([]SQLiteReportMeasurement{member, other})
+	if mixed[0].Convergence != nil {
+		t.Fatal("repeats pooled across decisions must not show one run's decision")
+	}
+}

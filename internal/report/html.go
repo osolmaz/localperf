@@ -1811,7 +1811,12 @@ func sloRowDisplay(measurement SQLiteReportMeasurement) string {
 func throughputRowShape(measurement SQLiteReportMeasurement) string {
 	shape := requestShape(measurement)
 	if measurement.ActiveRange != "" && shape != "-" {
-		return shape + " (" + measurement.ActiveRange + ")"
+		shape += " (" + measurement.ActiveRange + ")"
+	}
+	// A restored row decodes from a saved context; its shape must not match,
+	// and so never share a row with, a cold measurement of the same case.
+	if measurement.ContextPreparation == contextPreparationRestored && shape != "-" {
+		shape += " · restored context"
 	}
 	return shape
 }
