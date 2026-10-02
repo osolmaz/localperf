@@ -90,6 +90,7 @@ func runBench(args []string) {
 	runDir := flags.String("run-dir", "", "optional run directory")
 	artifactPath := flags.String("artifact", "", "optional artifact path; an existing artifact is appended to (model-level accumulation)")
 	resume := flags.Bool("resume", false, "skip planned runs whose result files already completed; requires --run-dir of the previous attempt")
+	replace := flags.Bool("replace", false, "overwrite an existing run directory and its recorded rows on purpose (default: refuse)")
 	dryRun := flags.Bool("dry-run", false, "write the execution plan without starting a server or sending requests")
 	timeout := flags.Duration("timeout", 0, "optional overall timeout, for example 2h")
 	var cases stringList
@@ -117,6 +118,12 @@ func runBench(args []string) {
 		os.Exit(1)
 	}
 	dir := runner.RunDir(*runDir, compiled.Spec, time.Now())
+	if !*resume {
+		if err := runner.CheckRunOverwrite(dir, compiled.Spec, *artifactPath, *replace); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
 	if *resume {
 		if err := benchmarkconfig.VerifyExecutionFiles(dir, compiled); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -351,14 +358,14 @@ func artifactRenderFlagNeedsValue(arg string) bool {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  localperf bench run --suite practical-64k --deployment deployment.json [--case generate-full] [--concurrency 1] [--dry-run] [--timeout 2h]
+  localperf bench run --suite practical-64k --deployment deployment.json [--case generate-full] [--concurrency 1] [--dry-run] [--timeout 2h] [--replace] [--resume]
 
   built-in suites: practical-64k, throughput-4k, context-ladder`)
 }
 
 func usageRoot() {
 	fmt.Fprintln(os.Stderr, `usage:
-  localperf bench run --suite practical-64k --deployment deployment.json [--case generate-full] [--concurrency 1] [--dry-run] [--timeout 2h]
+  localperf bench run --suite practical-64k --deployment deployment.json [--case generate-full] [--concurrency 1] [--dry-run] [--timeout 2h] [--replace] [--resume]
   localperf artifact check runs/example.sqlite
   localperf artifact render runs/example.sqlite [--output runs/example.html] [--store]
   localperf artifact merge --into runs/models/model.sqlite src1.sqlite [src2.sqlite ...]
