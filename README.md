@@ -8,16 +8,19 @@ localperf is a benchmark CLI for local LLM inference. It runs a named
 benchmark suite against one model deployment and keeps every run of that model
 in one SQLite file, from which it renders an HTML report.
 
-A deployment is either a vLLM server that localperf starts and stops itself,
-or an OpenAI-compatible server that is already running, such as llama.cpp's
-`llama-server`. The suite says what to measure, and the deployment says which
-model and runtime settings to measure it on.
+localperf is built around llama.cpp. It starts `llama-server` with a GGUF
+file, gives it one slot per user in the suite, measures, and stops it again.
+It can also measure a server that is already running, and it supports vLLM
+for machines that serve with it. The suite says what to measure, and the
+deployment says which model and runtime settings to measure it on.
 
 localperf checks the numbers before it reports them. A row labeled "64k
-active" means the requests really put about 64k tokens through the KV cache,
-and a run whose backend fell back to a different kernel is marked invalid
-instead of reported. Every request gets a unique prefix, so a repeated prompt
-cannot be answered from the server's prompt cache.
+active" means the requests really put about 64k tokens through the KV cache.
+Before the first measurement, localperf asks llama-server for its slot count
+and per-slot context and refuses a server that is too small for the suite, so
+requests never wait in a queue without the report saying so. Every request
+gets a unique prefix, so a repeated prompt cannot be answered from the
+server's prompt cache.
 
 ## Install
 
@@ -29,17 +32,21 @@ Download the archive for your system from the
 go install github.com/osolmaz/localperf/cmd/localperf@latest
 ```
 
-Real managed runs need vLLM installed as `vllm`, and enough free memory for
-the model you run. `sqlite3` is useful for looking inside artifacts from the
-shell.
+Real runs need a `llama-server` build from
+[llama.cpp](https://github.com/ggml-org/llama.cpp/releases), a GGUF model
+file, and enough free memory for the model and its KV cache. vLLM runs need
+vLLM installed instead. `sqlite3` is useful for looking inside artifacts from
+the shell.
 
 ## First run
 
-Copy the example deployment and set `model` to your model. Then replace the
-`replace-with-...` values with its revision and the pinned vLLM version:
+Copy the example deployment. Set `command` to your `llama-server`,
+`model_file` to your GGUF file, and `model` to the name the server should
+report. Then replace the `replace-with-...` values with the model revision and
+the llama.cpp build:
 
 ```sh
-cp examples/deployments/vllm-managed.json deployment.json
+cp examples/deployments/llama-cpp-managed.json deployment.json
 ```
 
 A dry run checks the suite and the deployment and writes the exact execution
@@ -78,38 +85,61 @@ thing.
 | `throughput-4k` | Decode throughput at 4k active context with 1, 4, 8, 16, and 32 users, three repeats each. |
 | `context-ladder` | Separate decode and prefill cases at 4k, 8k, 16k, 32k, 64k, and 128k active context, with the same user counts up to 64k and 1 and 4 users at 128k. |
 
-localperf sets `max_model_len` and `max_num_seqs` from the suite cases, and
-refuses runtime arguments that try to change them. Use `--case` and
-`--concurrency` only for a small smoke run or a deliberate subset.
+localperf sets the server's context size and slot count from the suite cases,
+and refuses runtime arguments that try to change them. For llama.cpp it
+passes `--parallel` with the largest user count and `--ctx-size` with that
+count times the largest context, because llama-server splits the context
+across its slots. `practical-64k` therefore starts llama-server with 6 slots
+of 64k each. Use `--case` and `--concurrency` only for a small smoke run or a
+deliberate subset.
 
 ## Deployments
 
-The example in `examples/deployments/vllm-managed.json` starts vLLM itself. To
-measure a server that is already running, set `managed` to `false`, point
-`endpoint_base_url` at it, and use the built-in HTTP client:
+`runtime.type` picks the engine and says whether localperf starts it:
+
+| Type | What localperf does |
+| --- | --- |
+| `llama-cpp-managed` | Starts `llama-server` with `server.llama_cpp.model_file`, measures, and stops it. |
+| `llama-cpp-endpoint` | Measures a `llama-server` that is already running at `endpoint_base_url`. |
+| `vllm-managed` | Starts `vllm serve`, measures, and stops it. |
+| `vllm-endpoint` | Measures a vLLM server that is already running. |
+| `openai-endpoint` | Measures any other OpenAI-compatible server, such as a hosted endpoint. |
+
+A managed llama.cpp deployment sets the model file and the llama-server
+options localperf owns under `server.llama_cpp`:
 
 ```json
-"runtime": {
-  "name": "llama.cpp",
-  "type": "openai-compatible",
-  "owner": "ggml-org",
-  "source": "official release",
-  "version": "b10156",
-  "managed": false,
-  "endpoint_base_url": "http://127.0.0.1:8110",
-  "health_path": "/health"
-},
-"client": {
-  "load_generator": "localperf_http",
-  "backend": "openai-chat",
-  "endpoint": "/v1/chat/completions"
+"server": {
+  "enable_prefix_caching": false,
+  "llama_cpp": {
+    "model_file": "/path/to/model.gguf",
+    "gpu_layers": 999,
+    "flash_attn": "auto",
+    "cache_type_k": "q8_0",
+    "cache_type_v": "q8_0"
+  }
 }
 ```
 
+`batch_size`, `ubatch_size`, and `threads` are also available. Pass other
+llama-server flags, such as `--jinja`, in `runtime.args`.
+
+To measure a llama-server that is already running, use
+[`llama-cpp-endpoint.json`](examples/deployments/llama-cpp-endpoint.json).
+Start the server with `--parallel` set to the suite's largest user count and
+`--ctx-size` set to that count times the suite's largest context. localperf
+reads both from `GET /props` and stops if either is too small.
+
+vLLM settings go under `server.vllm`; see
+[`vllm-managed.json`](examples/deployments/vllm-managed.json). With a vLLM
+runtime you can also set `client.load_generator` to `vllm_bench` to drive the
+server with `vllm bench serve` instead of localperf's own HTTP client.
+
 Every deployment has a `safety.min_mem_available_gib` floor. localperf reads
-`/proc/meminfo` before each step and while the server and load generator run.
-When free memory drops below the floor, it stops the current step and records
-the step as skipped or failed. Do not lower the floor to make a run pass.
+the available memory before each step and while the server and load generator
+run. When free memory drops below the floor, it stops the current step and
+records the step as skipped or failed. Do not lower the floor to make a run
+pass.
 
 ## Artifacts
 
@@ -152,8 +182,10 @@ has the full rules.
 The built-in HTTP client adds a short unique prefix to the first user message
 of every request, so a repeated prompt cannot hit the server's prompt cache and
 report a prefill speed that no cold request reaches. The prefix costs about ten
-tokens. To measure prefix reuse on purpose, turn it off on a case or a
-workload:
+tokens. With llama.cpp and `enable_prefix_caching` set to `false`, every
+request also sends `"cache_prompt": false`, so llama-server does not reuse a
+slot's earlier prompt either. To measure prefix reuse on purpose, turn the
+prefix off on a case or a workload:
 
 ```json
 "prompt_nonce": false
@@ -164,9 +196,10 @@ See [Prompt Nonces](docs/2026-09-18-prompt-nonces.md) for the details.
 
 ## Memory on unified-memory machines
 
-On a machine where the CPU and GPU share memory, such as an NVIDIA DGX Spark,
-process or cgroup memory does not show what the model really uses. Compare the
-drop in `MemAvailable` with the KV cache size that vLLM logs at startup.
+On a machine where the CPU and GPU share memory, such as a Mac or an NVIDIA
+DGX Spark, process or cgroup memory does not show what the model really uses.
+Compare the drop in available memory with the KV cache size that llama-server
+or vLLM logs at startup.
 localperf samples GPU use and memory from `tegrastats` and `nvidia-smi` and
 names the source in the report. [Measurement
 Methods](docs/2026-06-23-measurement-methods.md) explains how memory is

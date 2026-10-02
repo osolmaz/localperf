@@ -1,13 +1,13 @@
 ---
 name: localperf
-description: Prepare, run, resume, validate, review, compare, and report local LLM inference benchmarks with LocalPerf named suites, deployment files, and model-level SQLite artifacts. Use whenever a user mentions LocalPerf, practical-64k, throughput-4k, context-ladder, benchmark cases, LocalPerf artifacts or reports, or benchmarking a vLLM-managed or external OpenAI-compatible deployment through this repository.
-compatibility: Requires a trusted LocalPerf checkout or installed LocalPerf binary. Real managed runs require vLLM; source builds require Go 1.26 or newer. SQLite inspection requires sqlite3.
+description: Prepare, run, resume, validate, review, compare, and report local LLM inference benchmarks with LocalPerf named suites, deployment files, and model-level SQLite artifacts. Use whenever a user mentions LocalPerf, practical-64k, throughput-4k, context-ladder, benchmark cases, LocalPerf artifacts or reports, or benchmarking a llama.cpp (llama-server), vLLM, or external OpenAI-compatible deployment through this repository.
+compatibility: Requires a trusted LocalPerf checkout or installed LocalPerf binary. Real managed runs require llama-server from llama.cpp (or vLLM for vLLM deployments); source builds require Go 1.26 or newer. SQLite inspection requires sqlite3.
 ---
 
 # LocalPerf
 
 Use LocalPerf for the complete benchmark workflow. Do not substitute direct
-`vllm bench` calls, ad hoc load scripts, public spec files, or deleted planner
+`llama-bench` or `vllm bench` calls, ad hoc load scripts, public spec files, or deleted planner
 commands.
 
 ## Source of truth
@@ -87,7 +87,8 @@ A dry run proves deterministic compilation and persistence, not model fit,
 server compatibility, backend execution, or performance.
 
 Run one small real canary before scaling. Confirm process cleanup, health,
-model and runtime identity, exact token usage, backend observation, telemetry,
+model and runtime identity, exact token usage, the llama.cpp `server_limits`
+event or vLLM backend observation, telemetry,
 logs, and artifact validation. A supported fallback is acceptable only when
 the artifact and report say what actually ran.
 
