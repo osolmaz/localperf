@@ -3,13 +3,15 @@ package benchmarkconfig
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/osolmaz/localperf/internal/convergence"
 )
 
 func TestCasePromptNonceReachesTheWorkload(t *testing.T) {
 	disabled := false
 	cases := []Case{
-		{Name: "default", Role: "decode", Phase: "decode", InputTokens: 64, OutputTokens: 8, Repeats: 1},
-		{Name: "shared", Role: "decode", Phase: "decode", InputTokens: 64, OutputTokens: 8, Repeats: 1, PromptNonce: &disabled},
+		{Name: "default", Role: "decode", Phase: "decode", InputTokens: 64, OutputTokens: 8, Convergence: convergence.Fixed(1)},
+		{Name: "shared", Role: "decode", Phase: "decode", InputTokens: 64, OutputTokens: 8, Convergence: convergence.Fixed(1), PromptNonce: &disabled},
 	}
 	workloads := compileCases(cases, "profile", Deployment{})
 	if len(workloads) != 2 {

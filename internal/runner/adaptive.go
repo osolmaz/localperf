@@ -5,6 +5,8 @@ import (
 	"os"
 	"regexp"
 	"time"
+
+	"github.com/osolmaz/localperf/internal/convergence"
 )
 
 // Adaptive concurrency ladder: automates the sparse-search rule from
@@ -39,20 +41,34 @@ func (session *runSession) adaptiveSkipReason(planned PlannedRun) string {
 	return ""
 }
 
-// updateLadder evaluates stop rules after a completed point and remembers
-// the highest-concurrency row per (profile, workload).
-func (session *runSession) updateLadder(planned PlannedRun, row *ReportRow) {
+// ladderPoint is the summary of one completed point that the ladder rules
+// compare: its concurrency, the convergence interval of its throughput, and
+// the mean TTFT p99 over its samples.
+type ladderPoint struct {
+	concurrency int
+	throughput  convergence.Interval
+	p99TTFT     float64
+}
+
+// updateLadder evaluates the stop rules once a point has stopped and
+// remembers the highest-concurrency point per (profile, workload).
+func (session *runSession) updateLadder(planned PlannedRun, state *pointState) {
 	config := session.spec.Runner.Adaptive
-	if !config.enabled() || row == nil {
+	if !config.enabled() || state == nil || len(state.values) == 0 {
 		return
 	}
+	current := &ladderPoint{
+		concurrency: planned.Concurrency,
+		throughput:  convergence.Estimate(state.values),
+		p99TTFT:     convergence.Estimate(state.p99TTFTs).Mean,
+	}
 	key := ladderKey(planned.Profile.Name, planned.Workload.Name)
-	previous := session.ladderRows[key]
-	if reason := ladderStopReason(config, planned.Workload.Phase, previous, row); reason != "" {
+	previous := session.ladderPoints[key]
+	if reason := ladderStopReason(config, previous, current); reason != "" {
 		session.stopLadder(planned, reason)
 	}
-	if previous == nil || row.Concurrency >= previous.Concurrency {
-		session.ladderRows[key] = row
+	if previous == nil || current.concurrency >= previous.concurrency {
+		session.ladderPoints[key] = current
 	}
 }
 
@@ -67,23 +83,28 @@ func (session *runSession) stopLadder(planned PlannedRun, reason string) {
 	session.ladderStops[key] = adaptiveStop{concurrency: planned.Concurrency, reason: reason}
 }
 
-// ladderStopReason applies the pure stop rules: throughput plateau against
-// the previous concurrency and the TTFT p99 ceiling.
-func ladderStopReason(config AdaptiveConfig, phase string, previous, current *ReportRow) string {
-	if config.TTFTP99CeilingMillis > 0 && current.P99TTFTMillis > config.TTFTP99CeilingMillis {
-		return fmt.Sprintf("TTFT p99 %.0fms exceeded the %.0fms ceiling at concurrency %d", current.P99TTFTMillis, config.TTFTP99CeilingMillis, current.Concurrency)
+// ladderStopReason applies the pure stop rules: the TTFT p99 ceiling and a
+// throughput plateau against the previous concurrency. A gain counts only
+// when it reaches the minimum and, when both points have an interval, the
+// current lower bound is above the previous upper bound; overlapping
+// intervals are a tie.
+func ladderStopReason(config AdaptiveConfig, previous, current *ladderPoint) string {
+	if config.TTFTP99CeilingMillis > 0 && current.p99TTFT > config.TTFTP99CeilingMillis {
+		return fmt.Sprintf("TTFT p99 %.0fms exceeded the %.0fms ceiling at concurrency %d", current.p99TTFT, config.TTFTP99CeilingMillis, current.concurrency)
 	}
-	if config.MinThroughputGainPct <= 0 || previous == nil || previous.Concurrency >= current.Concurrency {
+	if config.MinThroughputGainPct <= 0 || previous == nil || previous.concurrency >= current.concurrency {
 		return ""
 	}
-	previousRate := phaseThroughput(phase, previous)
-	currentRate := phaseThroughput(phase, current)
+	previousRate := previous.throughput.Mean
 	if previousRate <= 0 {
 		return ""
 	}
-	gain := (currentRate - previousRate) / previousRate * 100
+	gain := (current.throughput.Mean - previousRate) / previousRate * 100
 	if gain < config.MinThroughputGainPct {
-		return fmt.Sprintf("throughput gained %.1f%% (< %.0f%%) from concurrency %d to %d", gain, config.MinThroughputGainPct, previous.Concurrency, current.Concurrency)
+		return fmt.Sprintf("throughput gained %.1f%% (< %.0f%%) from concurrency %d to %d", gain, config.MinThroughputGainPct, previous.concurrency, current.concurrency)
+	}
+	if previous.throughput.Known && current.throughput.Known && current.throughput.Low() <= previous.throughput.High() {
+		return fmt.Sprintf("throughput gain %.1f%% from concurrency %d to %d is inside the 95%% intervals", gain, previous.concurrency, current.concurrency)
 	}
 	return ""
 }

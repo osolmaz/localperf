@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/osolmaz/localperf/internal/artifact"
+	"github.com/osolmaz/localperf/internal/convergence"
 )
 
 func TestBuildPlanAndBenchCommand(t *testing.T) {
@@ -103,14 +104,14 @@ func TestValidateSpecAllowsSmallBenchmarkSamples(t *testing.T) {
 }
 
 func TestValidateWorkloadPositiveFieldsCoversEveryCountMode(t *testing.T) {
-	valid := Workload{NumPrompts: 1, Repeats: 1, MaxConcurrency: []int{1}}
+	valid := Workload{NumPrompts: 1, Convergence: convergence.Fixed(1), MaxConcurrency: []int{1}}
 	if issues := validateWorkloadPositiveFields("workload", valid); len(issues) != 0 {
 		t.Fatalf("valid workload issues = %v", issues)
 	}
 
 	missing := Workload{}
 	if issues := validateWorkloadPositiveFields("workload", missing); len(issues) != 3 {
-		t.Fatalf("missing workload issues = %v, want count/repeats/concurrency", issues)
+		t.Fatalf("missing workload issues = %v, want count/convergence/concurrency", issues)
 	}
 
 	mixed := valid
@@ -127,7 +128,7 @@ func TestValidateWorkloadPositiveFieldsCoversEveryCountMode(t *testing.T) {
 
 	batched := Workload{
 		Batches:        []Batch{{Concurrency: 0, Requests: 0}, {Concurrency: 0, Requests: 1}},
-		Repeats:        1,
+		Convergence:    convergence.Fixed(1),
 		MaxConcurrency: []int{1},
 	}
 	if issues := validateWorkloadPositiveFields("workload", batched); len(issues) != 3 {
@@ -1040,7 +1041,7 @@ func TestExecuteAttestsConcreteBackendForEachWorkloadPoint(t *testing.T) {
 	spec.Profiles[0].AttentionBackend = "flash_attn"
 	spec.Profiles[0].MoEBackend = "triton"
 	spec.Workloads = []Workload{testRandomWorkload("short", []string{spec.Profiles[0].Name}, 128, 16, 2, []int{1, 2})}
-	spec.Workloads[0].Repeats = 2
+	spec.Workloads[0].Convergence = convergence.Fixed(2)
 	appendTimestamp := false
 	spec.Runner.AppendTimestampToRun = &appendTimestamp
 	summary, err := Execute(context.Background(), spec, RunOptions{RunDir: filepath.Join(spec.OutputDir, "run")})
@@ -1173,7 +1174,7 @@ func TestExecuteRepeatsUseDistinctLogsAndMeasurements(t *testing.T) {
 	spec.Profiles[0].Port = freeTestPort()
 	spec.Profiles[0].EnableSleepMode = false
 	spec.Workloads = []Workload{testRandomWorkload("fake-random", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
-	spec.Workloads[0].Repeats = 2
+	spec.Workloads[0].Convergence = convergence.Fixed(2)
 	ApplyDefaults(&spec)
 	summary, err := Execute(context.Background(), spec, RunOptions{})
 	if err != nil {
@@ -2291,7 +2292,10 @@ func TestExecuteHTTPChecksMemoryBeforeRun(t *testing.T) {
 	}
 }
 
-func TestExecuteFailedRepeatsAttachToCorrectMeasurements(t *testing.T) {
+// TestExecuteFailedSampleStopsItsPoint checks the convergence failure rule:
+// a failed sample stops its point, and the remaining planned sample is
+// skipped with the stop reason instead of retried.
+func TestExecuteFailedSampleStopsItsPoint(t *testing.T) {
 	spec := testSpec()
 	spec.Name = "fake-vllm-repeat-failures"
 	spec.OutputDir = t.TempDir()
@@ -2308,14 +2312,14 @@ func TestExecuteFailedRepeatsAttachToCorrectMeasurements(t *testing.T) {
 	spec.Profiles[0].Port = freeTestPort()
 	spec.Profiles[0].EnableSleepMode = false
 	spec.Workloads = []Workload{testRandomWorkload("fake-random", []string{spec.Profiles[0].Name}, 128, 16, 1, []int{1})}
-	spec.Workloads[0].Repeats = 2
+	spec.Workloads[0].Convergence = convergence.Fixed(2)
 	ApplyDefaults(&spec)
 	summary, err := Execute(context.Background(), spec, RunOptions{})
 	if err == nil || !strings.Contains(err.Error(), "benchmark run") {
 		t.Fatalf("Execute error = %v, want failed benchmark run", err)
 	}
-	if summary.CompletedRuns != 0 || summary.FailedRuns != 2 {
-		t.Fatalf("summary = %+v, want two failed repeats", summary)
+	if summary.CompletedRuns != 0 || summary.FailedRuns != 1 || summary.SkippedRuns != 1 {
+		t.Fatalf("summary = %+v, want one failed and one skipped repeat", summary)
 	}
 	db, err := sql.Open("sqlite", summary.ArtifactPath)
 	if err != nil {
@@ -2327,7 +2331,11 @@ func TestExecuteFailedRepeatsAttachToCorrectMeasurements(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	var repeats []int
+	want := []struct{ status, message string }{
+		{"failed", "failed request"},
+		{"skipped", "point stopped (failed) after 0 sample(s)"},
+	}
+	index := 0
 	for rows.Next() {
 		var repeat int
 		var status string
@@ -2335,16 +2343,16 @@ func TestExecuteFailedRepeatsAttachToCorrectMeasurements(t *testing.T) {
 		if err := rows.Scan(&repeat, &status, &message); err != nil {
 			t.Fatal(err)
 		}
-		if status != "failed" || !message.Valid || !strings.Contains(message.String, "failed request") {
-			t.Fatalf("repeat %d status=%s message=%q, want failed request error", repeat, status, message.String)
+		if index >= len(want) || repeat != index || status != want[index].status || !strings.Contains(message.String, want[index].message) {
+			t.Fatalf("repeat %d status=%s message=%q, want %+v", repeat, status, message.String, want)
 		}
-		repeats = append(repeats, repeat)
+		index++
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(repeats) != "[0 1]" {
-		t.Fatalf("measurement repeats = %v, want [0 1]", repeats)
+	if index != len(want) {
+		t.Fatalf("measurement rows = %d, want %d", index, len(want))
 	}
 }
 

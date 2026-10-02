@@ -22,8 +22,9 @@ func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
 	if compiled.Spec.Provenance != runner.SpecProvenanceGenerated || runner.SpecProvenance(compiled.Spec) != runner.SpecProvenanceGenerated || compiled.Spec.Generator == nil || compiled.Spec.Generator.Tool != "localperf-suite" {
 		t.Fatalf("compiled provenance = %q / %+v", compiled.Spec.Provenance, compiled.Spec.Generator)
 	}
-	if len(plan) != 12 {
-		t.Fatalf("planned measurements = %d, want 12", len(plan))
+	// 2 cases x 2 concurrency points x max_repeats 10.
+	if len(plan) != 40 {
+		t.Fatalf("planned measurements = %d, want 40", len(plan))
 	}
 	want := map[string]map[int]int{
 		"generate-empty": {1: 1, 6: 6},
@@ -44,8 +45,8 @@ func TestPracticalSuiteCompilesExactlyTwelveMeasurements(t *testing.T) {
 	}
 	for name, byConcurrency := range counts {
 		for concurrency, repeats := range byConcurrency {
-			if repeats != 3 {
-				t.Fatalf("%s c%d repeats = %d, want 3", name, concurrency, repeats)
+			if repeats != DefaultConvergence.MaxRepeats {
+				t.Fatalf("%s c%d planned repeats = %d, want %d", name, concurrency, repeats, DefaultConvergence.MaxRepeats)
 			}
 		}
 	}
@@ -79,8 +80,8 @@ func TestSelectionUsesCaseAndConcurrencyTerms(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := runner.BuildPlan(compiled.Spec, t.TempDir())
-	if len(plan) != 3 {
-		t.Fatalf("planned measurements = %d, want 3", len(plan))
+	if len(plan) != DefaultConvergence.MaxRepeats {
+		t.Fatalf("planned measurements = %d, want %d", len(plan), DefaultConvergence.MaxRepeats)
 	}
 	for _, run := range plan {
 		if run.Workload.Name != "generate-full" || run.Concurrency != 1 {

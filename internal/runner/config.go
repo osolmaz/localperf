@@ -15,6 +15,7 @@ import (
 
 	"github.com/osolmaz/localperf/internal/bench"
 	"github.com/osolmaz/localperf/internal/collections"
+	"github.com/osolmaz/localperf/internal/convergence"
 )
 
 const DefaultHealthPath = "/v1/models"
@@ -200,26 +201,26 @@ type LlamaCppSettings struct {
 
 type Workload struct {
 	BenchmarkTrafficConfig
-	Name                    string      `json:"name"`
-	Role                    string      `json:"role"`
-	Phase                   string      `json:"phase,omitempty"`
-	ContextTarget           int         `json:"context_target"`
-	ContextSemantics        string      `json:"context_semantics"`
-	SLO                     *SLOConfig  `json:"slo,omitempty"`
-	LoadGenerator           string      `json:"load_generator,omitempty"`
-	Dataset                 DatasetSpec `json:"dataset,omitempty"`
-	Request                 RequestSpec `json:"request,omitempty"`
-	Profiles                []string    `json:"profiles,omitempty"`
-	NumPrompts              int         `json:"num_prompts"`
-	PromptsPerUser          int         `json:"prompts_per_user,omitempty"`
-	Batches                 []Batch     `json:"batches,omitempty"`
-	Repeats                 int         `json:"repeats,omitempty"`
-	MaxConcurrency          []int       `json:"max_concurrency"`
-	Stream                  *bool       `json:"stream,omitempty"`
-	PromptNonce             *bool       `json:"prompt_nonce,omitempty"`
-	IgnoreEOS               bool        `json:"ignore_eos,omitempty"`
-	Temperature             *float64    `json:"temperature,omitempty"`
-	CapturePayloadArtifacts bool        `json:"capture_payload_artifacts,omitempty"`
+	Name                    string             `json:"name"`
+	Role                    string             `json:"role"`
+	Phase                   string             `json:"phase,omitempty"`
+	ContextTarget           int                `json:"context_target"`
+	ContextSemantics        string             `json:"context_semantics"`
+	SLO                     *SLOConfig         `json:"slo,omitempty"`
+	LoadGenerator           string             `json:"load_generator,omitempty"`
+	Dataset                 DatasetSpec        `json:"dataset,omitempty"`
+	Request                 RequestSpec        `json:"request,omitempty"`
+	Profiles                []string           `json:"profiles,omitempty"`
+	NumPrompts              int                `json:"num_prompts"`
+	PromptsPerUser          int                `json:"prompts_per_user,omitempty"`
+	Batches                 []Batch            `json:"batches,omitempty"`
+	Convergence             convergence.Policy `json:"convergence"`
+	MaxConcurrency          []int              `json:"max_concurrency"`
+	Stream                  *bool              `json:"stream,omitempty"`
+	PromptNonce             *bool              `json:"prompt_nonce,omitempty"`
+	IgnoreEOS               bool               `json:"ignore_eos,omitempty"`
+	Temperature             *float64           `json:"temperature,omitempty"`
+	CapturePayloadArtifacts bool               `json:"capture_payload_artifacts,omitempty"`
 }
 
 // Batch records the exact number of requests in one concurrency point.
@@ -405,8 +406,8 @@ func largestConcurrency(workload Workload) int {
 }
 
 func applyWorkloadExecutionDefaults(workload *Workload) {
-	if workload.Repeats <= 0 {
-		workload.Repeats = 1
+	if workload.Convergence == (convergence.Policy{}) {
+		workload.Convergence = convergence.Fixed(1)
 	}
 }
 
@@ -1190,8 +1191,8 @@ func validateWorkloadPositiveFields(prefix string, workload Workload) []string {
 	if workload.PromptsPerUser < 0 {
 		issues = append(issues, prefix+": prompts_per_user must not be negative")
 	}
-	if workload.Repeats <= 0 {
-		issues = append(issues, prefix+": repeats must be positive")
+	if err := workload.Convergence.Validate(prefix); err != nil {
+		issues = append(issues, err.Error())
 	}
 	if len(workload.MaxConcurrency) == 0 {
 		issues = append(issues, prefix+": max_concurrency must not be empty")
@@ -1463,8 +1464,8 @@ func plannedProfileNames(workload Workload, profiles map[string]Profile) []strin
 }
 
 func plannedRepeats(workload Workload) int {
-	if workload.Repeats > 0 {
-		return workload.Repeats
+	if workload.Convergence.MaxRepeats > 0 {
+		return workload.Convergence.MaxRepeats
 	}
 	return 1
 }

@@ -12,10 +12,20 @@ import (
 	"strings"
 
 	"github.com/osolmaz/localperf/internal/artifact"
+	"github.com/osolmaz/localperf/internal/convergence"
 	"github.com/osolmaz/localperf/internal/runner"
 )
 
+// Version is the deployment and compiled runner spec format version.
 const Version = "1"
+
+// SuiteVersion is the suite format version. Version 2 replaced the fixed
+// repeats field with a convergence policy.
+const SuiteVersion = "2"
+
+// DefaultConvergence is the convergence policy of every built-in suite case;
+// see docs/2026-10-02-adaptive-convergence.md.
+var DefaultConvergence = convergence.Policy{MinRepeats: 3, MaxRepeats: 10, TargetRelHalfWidth: 0.05, MaxPointSeconds: 600}
 
 type Suite struct {
 	Version     string `json:"version"`
@@ -34,18 +44,18 @@ type Warmup struct {
 }
 
 type Case struct {
-	Name             string         `json:"name"`
-	Role             string         `json:"role"`
-	Phase            string         `json:"phase"`
-	InputTokens      int            `json:"input_tokens"`
-	OutputTokens     int            `json:"output_tokens"`
-	ContextTarget    int            `json:"context_target"`
-	ContextSemantics string         `json:"context_semantics"`
-	Batches          []runner.Batch `json:"batches"`
-	Repeats          int            `json:"repeats"`
-	Temperature      float64        `json:"temperature"`
-	IgnoreEOS        bool           `json:"ignore_eos"`
-	PromptNonce      *bool          `json:"prompt_nonce,omitempty"`
+	Name             string             `json:"name"`
+	Role             string             `json:"role"`
+	Phase            string             `json:"phase"`
+	InputTokens      int                `json:"input_tokens"`
+	OutputTokens     int                `json:"output_tokens"`
+	ContextTarget    int                `json:"context_target"`
+	ContextSemantics string             `json:"context_semantics"`
+	Batches          []runner.Batch     `json:"batches"`
+	Convergence      convergence.Policy `json:"convergence"`
+	Temperature      float64            `json:"temperature"`
+	IgnoreEOS        bool               `json:"ignore_eos"`
+	PromptNonce      *bool              `json:"prompt_nonce,omitempty"`
 }
 
 type Deployment struct {
@@ -194,7 +204,7 @@ func Compile(suite Suite, deployment Deployment, selection Selection) (Compiled,
 		Workloads: compileCases(cases, profileName, deployment),
 	}
 	runner.ApplyDefaults(&spec)
-	intent, err := json.Marshal(map[string]any{"suite": suite.Name})
+	intent, err := json.Marshal(map[string]any{"suite": suite.Name, "suite_version": suite.Version})
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -344,21 +354,21 @@ func builtinSuite(name string) (Suite, bool) {
 
 func practicalSuite() Suite {
 	fullBudget := activeTokenBudget(65536)
-	return Suite{Version: Version, Name: "practical-64k", Description: "Generation at minimal and near-full 64k context; every point reports decode and effective prefill.", Warmup: defaultWarmup(), Cases: []Case{
-		benchmarkCase("generate-empty", "decode", 1, 1024, 65536, runner.ContextSemanticsCapacity, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
-		benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, runner.ContextSemanticsActive, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}, 3),
+	return Suite{Version: SuiteVersion, Name: "practical-64k", Description: "Generation at minimal and near-full 64k context; every point reports decode and effective prefill.", Warmup: defaultWarmup(), Cases: []Case{
+		benchmarkCase("generate-empty", "decode", 1, 1024, 65536, runner.ContextSemanticsCapacity, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}),
+		benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, runner.ContextSemanticsActive, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}),
 	}}
 }
 
 func throughputSuite() Suite {
 	budget := activeTokenBudget(4096)
-	return Suite{Version: Version, Name: "throughput-4k", Description: "4k generation throughput at an explicit concurrency ladder.", Warmup: defaultWarmup(), Cases: []Case{
-		benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, runner.ContextSemanticsActive, standardBatches(), 3),
+	return Suite{Version: SuiteVersion, Name: "throughput-4k", Description: "4k generation throughput at an explicit concurrency ladder.", Warmup: defaultWarmup(), Cases: []Case{
+		benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, runner.ContextSemanticsActive, standardBatches()),
 	}}
 }
 
 func contextSuite() Suite {
-	suite := Suite{Version: Version, Name: "context-ladder", Description: "Explicit prefill and decode cases across the active-context ladder.", Warmup: defaultWarmup()}
+	suite := Suite{Version: SuiteVersion, Name: "context-ladder", Description: "Explicit prefill and decode cases across the active-context ladder.", Warmup: defaultWarmup()}
 	for _, context := range []int{4096, 8192, 16384, 32768, 65536, 131072} {
 		label := runner.TokenCountLabel(context)
 		batches := standardBatches()
@@ -367,8 +377,8 @@ func contextSuite() Suite {
 		}
 		budget := activeTokenBudget(context)
 		suite.Cases = append(suite.Cases,
-			benchmarkCase("prefill-"+label, "prefill", budget-1, 1, context, runner.ContextSemanticsActive, batches, 1),
-			benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, runner.ContextSemanticsActive, batches, 1),
+			benchmarkCase("prefill-"+label, "prefill", budget-1, 1, context, runner.ContextSemanticsActive, batches),
+			benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, runner.ContextSemanticsActive, batches),
 		)
 	}
 	return suite
@@ -393,8 +403,8 @@ func standardBatches() []runner.Batch {
 	return []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}, {Concurrency: 8, Requests: 8}, {Concurrency: 16, Requests: 16}, {Concurrency: 32, Requests: 32}}
 }
 
-func benchmarkCase(name, phase string, input, output, target int, semantics string, batches []runner.Batch, repeats int) Case {
-	return Case{Name: name, Role: runner.WorkloadRoleBenchmark, Phase: phase, InputTokens: input, OutputTokens: output, ContextTarget: target, ContextSemantics: semantics, Batches: batches, Repeats: repeats, Temperature: 0, IgnoreEOS: true}
+func benchmarkCase(name, phase string, input, output, target int, semantics string, batches []runner.Batch) Case {
+	return Case{Name: name, Role: runner.WorkloadRoleBenchmark, Phase: phase, InputTokens: input, OutputTokens: output, ContextTarget: target, ContextSemantics: semantics, Batches: batches, Convergence: DefaultConvergence, Temperature: 0, IgnoreEOS: true}
 }
 
 func compileWarmup(warmup Warmup, client Client) runner.WarmupConfig {
@@ -417,7 +427,7 @@ func compileCases(cases []Case, profile string, deployment Deployment) []runner.
 			ContextTarget: item.ContextTarget, ContextSemantics: item.ContextSemantics,
 			LoadGenerator: loadGenerator(deployment.Client),
 			Profiles:      []string{profile}, Batches: append([]runner.Batch(nil), item.Batches...),
-			Repeats: item.Repeats, IgnoreEOS: item.IgnoreEOS, Temperature: &temperature,
+			Convergence: item.Convergence, IgnoreEOS: item.IgnoreEOS, Temperature: &temperature,
 			PromptNonce: item.PromptNonce,
 		})
 	}
@@ -508,8 +518,8 @@ func suiteLimits(cases []Case) (int, int) {
 
 func validateSuite(suite Suite) error {
 	var issues []string
-	if suite.Version != Version {
-		issues = append(issues, `version must be "1"`)
+	if suite.Version != SuiteVersion {
+		issues = append(issues, `version must be "`+SuiteVersion+`"`)
 	}
 	if strings.TrimSpace(suite.Name) == "" {
 		issues = append(issues, "name is required")
@@ -527,8 +537,11 @@ func validateSuite(suite Suite) error {
 			issues = append(issues, prefix+": duplicate name "+item.Name)
 		}
 		names[item.Name] = true
-		if item.InputTokens <= 0 || item.OutputTokens <= 0 || item.ContextTarget <= 0 || item.Repeats <= 0 {
-			issues = append(issues, prefix+": token counts, context_target, and repeats must be positive")
+		if item.InputTokens <= 0 || item.OutputTokens <= 0 || item.ContextTarget <= 0 {
+			issues = append(issues, prefix+": token counts and context_target must be positive")
+		}
+		if err := item.Convergence.Validate(prefix); err != nil {
+			issues = append(issues, err.Error())
 		}
 		if len(item.Batches) == 0 {
 			issues = append(issues, prefix+": batches must not be empty")
