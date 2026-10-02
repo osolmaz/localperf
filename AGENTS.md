@@ -11,10 +11,11 @@ npx -y @simpledoc/simpledoc check
 go run github.com/osolmaz/slophammer/go/cmd/slophammer-go@v0.4.1 check .
 ```
 
-The default CI path is non-mutating. `scripts/check-crap.sh` and
-`scripts/check-mutation.sh` are explicit Slophammer debt gates; run them when
-working on the core runner or artifact internals and expect them to require
-focused cleanup if they fail.
+CI also runs `scripts/check-crap.sh`; run it locally when working on the core
+runner or artifact internals. Mutation testing is optional and is not part of
+the regular dev path or push and pull-request CI. The `Mutation` workflow runs
+a weekly scan. Run `scripts/check-mutation.sh`, or that workflow by hand, only
+when Onur asks for it.
 
 For changes that affect benchmark behavior, artifacts, or reports, also run one
 small dry benchmark case and validate the SQLite artifact:

@@ -199,9 +199,10 @@ the rule compares means as it does today.
 
 - `internal/convergence`: the policy type, the t table,
   `Evaluate(values []float64, durations []time.Duration, policy Policy) Decision`,
-  and the `StopRecord` event payload with its `Verify` method. It has no I/O. Unit tests cover the table edges, `n = 1`, a zero mean,
-  identical samples, each stop reason, and the time-budget estimate. The package
-  must pass the Slophammer CRAP and mutation gates.
+  and the `StopRecord` event payload with its `Verify` method. It has no I/O.
+  Unit tests cover the table edges, `n = 1`, a zero mean, identical samples,
+  each stop reason, and the time-budget estimate. The package must pass the
+  Slophammer CRAP gate.
 - `internal/benchmarkconfig`: suite cases declare `convergence`, and validation
   enforces the bounds above.
 - `internal/runner`: the skip hook, the `point_stopped` event, and the ladder
