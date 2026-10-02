@@ -406,10 +406,6 @@ func (session *runSession) skipResumedRuns(runs []PlannedRun) []PlannedRun {
 		}
 		session.summary.CompletedRuns++
 		session.summary.Rows = append(session.summary.Rows, *row)
-		// Resumed rows replay point convergence, and through it the
-		// adaptive ladder, so stop state from the previous attempt is not
-		// forgotten.
-		session.recordPointSample(planned, row)
 		session.events.Write(Event{
 			Timestamp:   time.Now().UTC(),
 			Type:        "workload_resumed",
@@ -419,6 +415,11 @@ func (session *runSession) skipResumedRuns(runs []PlannedRun) []PlannedRun {
 			Repeat:      planned.Repeat,
 			ResultFile:  planned.ResultFile,
 		})
+		// Resumed rows replay point convergence, and through it the
+		// adaptive ladder, so stop state from the previous attempt is not
+		// forgotten. The replayed decision follows the resumed sample's
+		// event, like a decision after a measured sample.
+		session.recordPointSample(planned, row)
 	}
 	return remaining
 }
@@ -1221,8 +1222,13 @@ func resultMatchesShape(raw ReportRow, workload Workload) bool {
 	return true
 }
 
+// shapeTokenAllowance covers what a request adds to the requested random
+// prompt: a chat template and the prompt nonce. A 1-token prompt measures
+// about 22 tokens on a llama.cpp chat endpoint.
+const shapeTokenAllowance = 64
+
 func shapeDiffers(measured, requested float64) bool {
-	return math.Abs(measured-requested) > 0.2*requested+16
+	return math.Abs(measured-requested) > 0.2*requested+shapeTokenAllowance
 }
 
 func executeLoadCommand(ctx context.Context, spec Spec, planned PlannedRun, command CommandSpec, logPath string) (commandResult, error) {

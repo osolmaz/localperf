@@ -187,6 +187,11 @@ func TestResultMatchesShape(t *testing.T) {
 			}
 		})
 	}
+	// A 1-token prompt grows by the chat template and the nonce.
+	empty := Workload{BenchmarkTrafficConfig: BenchmarkTrafficConfig{DatasetName: "random", RandomInputLen: 1, RandomOutputLen: 1024}, IgnoreEOS: true}
+	if !resultMatchesShape(ReportRow{Completed: 1, PromptTokens: 22, CompletionTokens: 1024}, empty) {
+		t.Fatal("a 1-token prompt with template and nonce overhead must stay resumable")
+	}
 	// Non-random datasets and EOS-terminated outputs are not shape-checked.
 	custom := Workload{BenchmarkTrafficConfig: BenchmarkTrafficConfig{DatasetName: "custom"}}
 	if !resultMatchesShape(ReportRow{Completed: 4, PromptTokens: 1}, custom) {
