@@ -74,9 +74,11 @@ reuses the cache: on the Prism fork, a restored 4,000-token cache answered a
   `localperf/context-snapshots` under the user cache directory.
 - An endpoint llama.cpp server must be started with `--slot-save-path`. When a
   save or restore fails, the sample fails with the server's error.
-- The file name is a hash of the model, the model file, the KV cache types, and
-  the base prompt. A later run of the same case on the same model reuses the
-  file and skips the prime.
+- The file name is a hash of everything that changes the saved state: the
+  model, the model file, the deployment's model revision, the runtime command,
+  version, and digest, the KV cache types, flash attention, the per-slot
+  context, and the base prompt. A later run of the same case on the same
+  deployment reuses the file and skips the prime; any change primes a new one.
 
 ## Evidence
 

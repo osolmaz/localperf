@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -60,13 +61,20 @@ func restoredBasePrompt(workload Workload) string {
 }
 
 // restoredSnapshotFile names the snapshot by everything that changes its
-// contents, so a later run of the same case on the same model reuses it.
-func restoredSnapshotFile(profile Profile, basePrompt string) string {
+// contents: the immutable model revision, the runtime build, the settings
+// that shape the KV state, and the base prompt. A later run of the same case
+// on the same deployment reuses it; any change primes a new one.
+func restoredSnapshotFile(engine EngineConfig, profile Profile, basePrompt string) string {
 	settings := LlamaCppSettings{}
 	if profile.LlamaCpp != nil {
 		settings = *profile.LlamaCpp
 	}
-	key := strings.Join([]string{profile.Model, settings.ModelFile, settings.CacheTypeK, settings.CacheTypeV, sha256Hex([]byte(basePrompt))}, "\x00")
+	key := strings.Join([]string{
+		profile.Model, settings.ModelFile, metadataString(engine.Metadata, "model_revision"),
+		engine.Command, metadataString(engine.Metadata, "runtime_version_requested"), metadataString(engine.Metadata, "runtime_digest"),
+		settings.CacheTypeK, settings.CacheTypeV, settings.FlashAttn, strconv.Itoa(profile.MaxModelLen),
+		sha256Hex([]byte(basePrompt)),
+	}, "\x00")
 	sum := sha256.Sum256([]byte(key))
 	return "localperf-" + hex.EncodeToString(sum[:8]) + ".bin"
 }
@@ -74,9 +82,9 @@ func restoredSnapshotFile(profile Profile, basePrompt string) string {
 // prepareRestoredContext makes the snapshot available and restores it into
 // slots 0 to concurrency-1. A missing or unusable snapshot is primed from a
 // cold prefill of the base prompt and saved once.
-func prepareRestoredContext(ctx context.Context, client openAIHTTPClient, planned PlannedRun) (restoredContext, ContextPreparationEvidence, error) {
+func prepareRestoredContext(ctx context.Context, client openAIHTTPClient, engine EngineConfig, planned PlannedRun) (restoredContext, ContextPreparationEvidence, error) {
 	base := restoredBasePrompt(planned.Workload)
-	prepared := restoredContext{basePrompt: base, snapshot: restoredSnapshotFile(planned.Profile, base)}
+	prepared := restoredContext{basePrompt: base, snapshot: restoredSnapshotFile(engine, planned.Profile, base)}
 	evidence := ContextPreparationEvidence{Mode: ContextPreparationRestored, SnapshotFile: prepared.snapshot, BasePromptSHA256: sha256Hex([]byte(base))}
 	tokens, millis, err := client.restoreSlot(ctx, 0, prepared.snapshot)
 	if err != nil {
@@ -165,6 +173,11 @@ func (client openAIHTTPClient) postJSON(ctx context.Context, path string, body m
 		return nil, fmt.Errorf("%s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	return data, nil
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
 }
 
 // restoredRequests turns the planned requests into raw prompts that start
