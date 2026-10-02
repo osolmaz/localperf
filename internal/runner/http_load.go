@@ -21,44 +21,45 @@ import (
 )
 
 type HTTPBenchmarkResult struct {
-	Date                          string          `json:"date"`
-	LoadGenerator                 string          `json:"load_generator"`
-	EndpointType                  string          `json:"endpoint_type"`
-	Backend                       string          `json:"backend"`
-	ModelID                       string          `json:"model_id"`
-	TokenizerID                   string          `json:"tokenizer_id,omitempty"`
-	NumPrompts                    int             `json:"num_prompts"`
-	RequestRate                   string          `json:"request_rate"`
-	MaxConcurrency                int             `json:"max_concurrency"`
-	Duration                      float64         `json:"duration"`
-	Completed                     int             `json:"completed"`
-	Failed                        int             `json:"failed"`
-	TotalInputTokens              int             `json:"total_input_tokens"`
-	TotalOutputTokens             int             `json:"total_output_tokens"`
-	TotalTokens                   int             `json:"total_tokens"`
-	RequestThroughput             float64         `json:"request_throughput"`
-	OutputThroughput              float64         `json:"output_throughput"`
-	TotalTokenThroughput          float64         `json:"total_token_throughput"`
-	RequestOutputThroughputMean   float64         `json:"request_output_throughput_mean,omitempty"`
-	RequestOutputThroughputStdDev float64         `json:"request_output_throughput_stddev,omitempty"`
-	RequestOutputThroughputMin    float64         `json:"request_output_throughput_min,omitempty"`
-	RequestOutputThroughputP50    float64         `json:"request_output_throughput_p50,omitempty"`
-	RequestOutputThroughputP95    float64         `json:"request_output_throughput_p95,omitempty"`
-	RequestOutputThroughputP99    float64         `json:"request_output_throughput_p99,omitempty"`
-	RequestOutputThroughputMax    float64         `json:"request_output_throughput_max,omitempty"`
-	RequestTotalThroughputMean    float64         `json:"request_total_throughput_mean,omitempty"`
-	RequestTotalThroughputStdDev  float64         `json:"request_total_throughput_stddev,omitempty"`
-	MeanTTFTMillis                float64         `json:"mean_ttft_ms,omitempty"`
-	P50TTFTMillis                 float64         `json:"p50_ttft_ms,omitempty"`
-	P95TTFTMillis                 float64         `json:"p95_ttft_ms,omitempty"`
-	P99TTFTMillis                 float64         `json:"p99_ttft_ms,omitempty"`
-	TTFTSource                    string          `json:"ttft_source,omitempty"`
-	MeanLatencyMillis             float64         `json:"mean_latency_ms,omitempty"`
-	StdLatencyMillis              float64         `json:"std_latency_ms,omitempty"`
-	P50LatencyMillis              float64         `json:"p50_latency_ms,omitempty"`
-	P95LatencyMillis              float64         `json:"p95_latency_ms,omitempty"`
-	P99LatencyMillis              float64         `json:"p99_latency_ms,omitempty"`
-	RequestSamples                []RequestSample `json:"request_samples,omitempty"`
+	Date                          string                      `json:"date"`
+	LoadGenerator                 string                      `json:"load_generator"`
+	EndpointType                  string                      `json:"endpoint_type"`
+	Backend                       string                      `json:"backend"`
+	ModelID                       string                      `json:"model_id"`
+	TokenizerID                   string                      `json:"tokenizer_id,omitempty"`
+	NumPrompts                    int                         `json:"num_prompts"`
+	RequestRate                   string                      `json:"request_rate"`
+	MaxConcurrency                int                         `json:"max_concurrency"`
+	Duration                      float64                     `json:"duration"`
+	Completed                     int                         `json:"completed"`
+	Failed                        int                         `json:"failed"`
+	TotalInputTokens              int                         `json:"total_input_tokens"`
+	TotalOutputTokens             int                         `json:"total_output_tokens"`
+	TotalTokens                   int                         `json:"total_tokens"`
+	RequestThroughput             float64                     `json:"request_throughput"`
+	OutputThroughput              float64                     `json:"output_throughput"`
+	TotalTokenThroughput          float64                     `json:"total_token_throughput"`
+	RequestOutputThroughputMean   float64                     `json:"request_output_throughput_mean,omitempty"`
+	RequestOutputThroughputStdDev float64                     `json:"request_output_throughput_stddev,omitempty"`
+	RequestOutputThroughputMin    float64                     `json:"request_output_throughput_min,omitempty"`
+	RequestOutputThroughputP50    float64                     `json:"request_output_throughput_p50,omitempty"`
+	RequestOutputThroughputP95    float64                     `json:"request_output_throughput_p95,omitempty"`
+	RequestOutputThroughputP99    float64                     `json:"request_output_throughput_p99,omitempty"`
+	RequestOutputThroughputMax    float64                     `json:"request_output_throughput_max,omitempty"`
+	RequestTotalThroughputMean    float64                     `json:"request_total_throughput_mean,omitempty"`
+	RequestTotalThroughputStdDev  float64                     `json:"request_total_throughput_stddev,omitempty"`
+	MeanTTFTMillis                float64                     `json:"mean_ttft_ms,omitempty"`
+	P50TTFTMillis                 float64                     `json:"p50_ttft_ms,omitempty"`
+	P95TTFTMillis                 float64                     `json:"p95_ttft_ms,omitempty"`
+	P99TTFTMillis                 float64                     `json:"p99_ttft_ms,omitempty"`
+	TTFTSource                    string                      `json:"ttft_source,omitempty"`
+	MeanLatencyMillis             float64                     `json:"mean_latency_ms,omitempty"`
+	StdLatencyMillis              float64                     `json:"std_latency_ms,omitempty"`
+	P50LatencyMillis              float64                     `json:"p50_latency_ms,omitempty"`
+	P95LatencyMillis              float64                     `json:"p95_latency_ms,omitempty"`
+	P99LatencyMillis              float64                     `json:"p99_latency_ms,omitempty"`
+	RequestSamples                []RequestSample             `json:"request_samples,omitempty"`
+	ContextPreparation            *ContextPreparationEvidence `json:"context_preparation,omitempty"`
 }
 
 type RequestSample struct {
@@ -86,6 +87,7 @@ type RequestSample struct {
 	ErrorType             string         `json:"error_type,omitempty"`
 	ErrorCode             string         `json:"error_code,omitempty"`
 	ErrorMessage          string         `json:"error_message,omitempty"`
+	CachedPromptTokens    *int           `json:"cached_prompt_tokens,omitempty"`
 	ResponseMetadata      map[string]any `json:"response_metadata,omitempty"`
 }
 
@@ -100,6 +102,10 @@ type openAIHTTPClient struct {
 	workload Workload
 	client   *http.Client
 	nonce    *promptNonce
+	// restored is set for a restored-context case; slots is its concurrency,
+	// and request i goes to slot i modulo slots.
+	restored *restoredContext
+	slots    int
 }
 
 type openAIResponse struct {
@@ -122,9 +128,22 @@ type openAIMessage struct {
 }
 
 type openAIUsage struct {
-	PromptTokens     *int `json:"prompt_tokens,omitempty"`
-	CompletionTokens *int `json:"completion_tokens,omitempty"`
-	TotalTokens      *int `json:"total_tokens,omitempty"`
+	PromptTokens        *int                `json:"prompt_tokens,omitempty"`
+	CompletionTokens    *int                `json:"completion_tokens,omitempty"`
+	TotalTokens         *int                `json:"total_tokens,omitempty"`
+	PromptTokensDetails *openAIPromptDetail `json:"prompt_tokens_details,omitempty"`
+}
+
+type openAIPromptDetail struct {
+	CachedTokens *int `json:"cached_tokens,omitempty"`
+}
+
+// cachedTokens is the prompt cache hit the server reports, or nil.
+func (usage openAIUsage) cachedTokens() *int {
+	if usage.PromptTokensDetails == nil {
+		return nil
+	}
+	return usage.PromptTokensDetails.CachedTokens
 }
 
 type openAIError struct {
@@ -236,11 +255,25 @@ func runHTTPBenchmark(ctx context.Context, planned PlannedRun) (*HTTPBenchmarkRe
 		workload: planned.Workload,
 		client:   &http.Client{},
 		nonce:    promptNonceFor(planned.Workload, randomPromptNonceSalt()),
+		slots:    max(planned.Concurrency, 1),
+	}
+	var preparation *ContextPreparationEvidence
+	if planned.Workload.restoresContext() {
+		// Preparation runs before the sample clock starts: priming and
+		// restoring the context are setup, not decode.
+		prepared, evidence, err := prepareRestoredContext(ctx, client, planned)
+		if err != nil {
+			return nil, err
+		}
+		client.restored = &prepared
+		requests = restoredRequests(requests, prepared)
+		preparation = &evidence
 	}
 	start := time.Now().UTC()
 	samples, err := scheduleHTTPRequests(ctx, client, requests, planned)
 	end := time.Now().UTC()
 	result := buildHTTPBenchmarkResult(planned, samples, start, end)
+	result.ContextPreparation = preparation
 	return result, err
 }
 
@@ -436,9 +469,13 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 }
 
 func (client openAIHTTPClient) Invoke(ctx context.Context, index int, request CanonicalRequest) RequestSample {
+	return client.checkRestored(client.invoke(ctx, index, request))
+}
+
+func (client openAIHTTPClient) invoke(ctx context.Context, index int, request CanonicalRequest) RequestSample {
 	request = client.stampPrompt(request)
 	sample := newRequestSample(index, request)
-	payload, endpoint, err := client.requestPayload(request)
+	payload, endpoint, err := client.requestPayload(index, request)
 	if err != nil {
 		return sample.withError("request_render", "", err.Error(), time.Now().UTC(), nil)
 	}
@@ -473,8 +510,8 @@ func newRequestSample(index int, request CanonicalRequest) RequestSample {
 	}
 }
 
-func (client openAIHTTPClient) requestPayload(request CanonicalRequest) ([]byte, string, error) {
-	body, endpoint, err := client.requestBody(request)
+func (client openAIHTTPClient) requestPayload(index int, request CanonicalRequest) ([]byte, string, error) {
+	body, endpoint, err := client.requestBody(index, request)
 	if err != nil {
 		return nil, "", err
 	}
@@ -746,6 +783,7 @@ func (stream *httpStreamResult) applyToSample(sample RequestSample, request Cano
 	// stream must not be credited phantom output tokens.
 	sample.CompletionTokens = usageInt(stream.usage.CompletionTokens, stream.tokenChunks)
 	sample.TotalTokens = usageInt(stream.usage.TotalTokens, sample.PromptTokens+sample.CompletionTokens)
+	sample.CachedPromptTokens = stream.usage.cachedTokens()
 	// firstTokenAt is nil only for a clean finish that streamed no token
 	// (accepted above); such a point contributes no TTFT/TPOT/ITL, which is
 	// honest rather than a fabricated zero. Token counts are assigned first
@@ -809,10 +847,18 @@ func hasCompletionChoice(choices []openAIChoice) bool {
 	return false
 }
 
-func (client openAIHTTPClient) requestBody(request CanonicalRequest) (map[string]any, string, error) {
+func (client openAIHTTPClient) requestBody(index int, request CanonicalRequest) (map[string]any, string, error) {
 	body, err := client.baseRequestBody(request)
 	if err != nil {
 		return nil, "", err
+	}
+	if client.restored != nil {
+		built, endpoint, err := client.restoredRequestBody(body, request, index%client.slots)
+		if err != nil {
+			return nil, "", err
+		}
+		client.enforceStreamOptions(built)
+		return built, endpoint, nil
 	}
 	backend, err := client.requestBackend(request)
 	if err != nil {
@@ -949,6 +995,7 @@ func (sample RequestSample) withSuccess(request CanonicalRequest, response openA
 	sample.PromptTokens = usageInt(response.Usage.PromptTokens, request.InputTokensExpected)
 	sample.CompletionTokens = usageInt(response.Usage.CompletionTokens, request.OutputTokensExpected)
 	sample.TotalTokens = usageInt(response.Usage.TotalTokens, sample.PromptTokens+sample.CompletionTokens)
+	sample.CachedPromptTokens = response.Usage.cachedTokens()
 	sample.ResponseSHA256 = sha256Hex(data)
 	sample.ResponseMetadata = responseMetadata(response)
 	sample.deriveThroughput()

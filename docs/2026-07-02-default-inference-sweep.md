@@ -12,30 +12,35 @@ behind flags.
 
 ## `practical-64k`
 
-The practical suite contains only generation from minimal and near-full 64k
-context. It runs `generate-empty` and `generate-full` at concurrency 1 and 6.
-Each of the four points runs 3 to 10 samples under the default convergence
-policy, so the plan holds 40 planned measurements and a stable run completes
-12 of them. Each batch contains exactly one request per concurrent slot. See
+The practical suite contains generation from minimal and near-full 64k context
+and one cold 64k prefill. It runs `generate-empty` and `generate-full` at
+concurrency 1 and 6, and `prefill-64k` at concurrency 1. Each of the five
+points runs 3 to 10 samples under the default convergence policy, so the plan
+holds 50 planned measurements and a stable run completes 15 of them. Each batch
+contains exactly one request per concurrent slot. See
 [Adaptive convergence](2026-10-02-adaptive-convergence.md).
 
-Each valid generation measurement populates both decode and effective-prefill
-columns in the established report table. There is no prefill-only case and no
-4k reference in this suite. See
-[Practical c1/c6 64k](2026-07-31-practical-c1-c6-64k.md).
+`generate-full` starts every sample from a restored 64k context and reports
+decode only; `prefill-64k` supplies its c1 prefill columns. `generate-empty`
+reports decode and effective prefill from the same requests. There is no 4k
+reference in this suite. See
+[Practical c1/c6 64k](2026-07-31-practical-c1-c6-64k.md) and
+[Restored context decode](2026-10-02-restored-context-decode.md).
 
 ## `throughput-4k`
 
 This is the separate 4k aggregate-generation-throughput suite. Use it when the
 question is throughput at 4k capacity. Do not attach it to a practical run or
-describe it as an active-context result from another suite.
+describe it as an active-context result from another suite. Every sample starts
+from a restored 4k context.
 
 ## `context-ladder`
 
 This suite contains dedicated prefill and decode cases at active context
 targets `4k`, `8k`, `16k`, `32k`, `64k`, and `128k`, using explicit
 concurrency/request batches at `1`, `4`, `8`, `16`, and `32`; the 128k cases
-stop at c4.
+stop at c4. The `decode-*` cases start every sample from a restored context;
+the `prefill-*` cases stay cold.
 
 ## Execution
 

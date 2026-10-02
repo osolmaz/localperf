@@ -649,6 +649,11 @@ func startManagedProfile(ctx context.Context, spec Spec, runDir string, profile 
 	if !profile.Managed {
 		return nil, nil
 	}
+	if profileEngineFamily(spec, profile) == EngineFamilyLlamaCpp {
+		if err := os.MkdirAll(spec.Runner.SnapshotDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create snapshot dir: %w", err)
+		}
+	}
 	return startServer(ctx, spec, runDir, profile, events)
 }
 

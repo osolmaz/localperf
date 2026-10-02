@@ -63,6 +63,12 @@ func (client openAIHTTPClient) stampPrompt(request CanonicalRequest) CanonicalRe
 		return request
 	}
 	prefix := client.nonce.prefix()
+	if client.restored != nil {
+		// A restored context must keep the base prompt as an exact prefix of
+		// every request, so the nonce goes at the end.
+		request.Prompt = request.Prompt + " " + strings.TrimSpace(prefix)
+		return request
+	}
 	if index := firstUserMessage(request.Messages); index >= 0 {
 		messages := append([]Message(nil), request.Messages...)
 		messages[index].Content = prefix + messages[index].Content

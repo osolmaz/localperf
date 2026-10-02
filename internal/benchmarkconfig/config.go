@@ -20,8 +20,9 @@ import (
 const Version = "1"
 
 // SuiteVersion is the suite format version. Version 2 replaced the fixed
-// repeats field with a convergence policy.
-const SuiteVersion = "2"
+// repeats field with a convergence policy; version 3 starts decode cases from
+// a restored context.
+const SuiteVersion = "3"
 
 // DefaultConvergence is the convergence policy of every built-in suite case;
 // see docs/2026-10-02-adaptive-convergence.md.
@@ -44,18 +45,19 @@ type Warmup struct {
 }
 
 type Case struct {
-	Name             string             `json:"name"`
-	Role             string             `json:"role"`
-	Phase            string             `json:"phase"`
-	InputTokens      int                `json:"input_tokens"`
-	OutputTokens     int                `json:"output_tokens"`
-	ContextTarget    int                `json:"context_target"`
-	ContextSemantics string             `json:"context_semantics"`
-	Batches          []runner.Batch     `json:"batches"`
-	Convergence      convergence.Policy `json:"convergence"`
-	Temperature      float64            `json:"temperature"`
-	IgnoreEOS        bool               `json:"ignore_eos"`
-	PromptNonce      *bool              `json:"prompt_nonce,omitempty"`
+	Name               string             `json:"name"`
+	Role               string             `json:"role"`
+	Phase              string             `json:"phase"`
+	InputTokens        int                `json:"input_tokens"`
+	OutputTokens       int                `json:"output_tokens"`
+	ContextTarget      int                `json:"context_target"`
+	ContextSemantics   string             `json:"context_semantics"`
+	Batches            []runner.Batch     `json:"batches"`
+	Convergence        convergence.Policy `json:"convergence"`
+	Temperature        float64            `json:"temperature"`
+	IgnoreEOS          bool               `json:"ignore_eos"`
+	PromptNonce        *bool              `json:"prompt_nonce,omitempty"`
+	ContextPreparation string             `json:"context_preparation,omitempty"`
 }
 
 type Deployment struct {
@@ -356,14 +358,15 @@ func practicalSuite() Suite {
 	fullBudget := activeTokenBudget(65536)
 	return Suite{Version: SuiteVersion, Name: "practical-64k", Description: "Generation at minimal and near-full 64k context; every point reports decode and effective prefill.", Warmup: defaultWarmup(), Cases: []Case{
 		benchmarkCase("generate-empty", "decode", 1, 1024, 65536, runner.ContextSemanticsCapacity, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}),
-		benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, runner.ContextSemanticsActive, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}}),
+		restored(benchmarkCase("generate-full", "decode", fullBudget-1024, 1024, 65536, runner.ContextSemanticsActive, []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 6, Requests: 6}})),
+		benchmarkCase("prefill-64k", "prefill", fullBudget-1, 1, 65536, runner.ContextSemanticsActive, []runner.Batch{{Concurrency: 1, Requests: 1}}),
 	}}
 }
 
 func throughputSuite() Suite {
 	budget := activeTokenBudget(4096)
 	return Suite{Version: SuiteVersion, Name: "throughput-4k", Description: "4k generation throughput at an explicit concurrency ladder.", Warmup: defaultWarmup(), Cases: []Case{
-		benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, runner.ContextSemanticsActive, standardBatches()),
+		restored(benchmarkCase("throughput-4k", "decode", budget-1024, 1024, 4096, runner.ContextSemanticsActive, standardBatches())),
 	}}
 }
 
@@ -378,7 +381,7 @@ func contextSuite() Suite {
 		budget := activeTokenBudget(context)
 		suite.Cases = append(suite.Cases,
 			benchmarkCase("prefill-"+label, "prefill", budget-1, 1, context, runner.ContextSemanticsActive, batches),
-			benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, runner.ContextSemanticsActive, batches),
+			restored(benchmarkCase("decode-"+label, "decode", budget-1024, 1024, context, runner.ContextSemanticsActive, batches)),
 		)
 	}
 	return suite
@@ -401,6 +404,13 @@ func defaultWarmup() Warmup {
 
 func standardBatches() []runner.Batch {
 	return []runner.Batch{{Concurrency: 1, Requests: 1}, {Concurrency: 4, Requests: 4}, {Concurrency: 8, Requests: 8}, {Concurrency: 16, Requests: 16}, {Concurrency: 32, Requests: 32}}
+}
+
+// restored starts every sample of a decode case from a saved KV cache of its
+// base prompt; see docs/2026-10-02-restored-context-decode.md.
+func restored(item Case) Case {
+	item.ContextPreparation = runner.ContextPreparationRestored
+	return item
 }
 
 func benchmarkCase(name, phase string, input, output, target int, semantics string, batches []runner.Batch) Case {
@@ -428,7 +438,7 @@ func compileCases(cases []Case, profile string, deployment Deployment) []runner.
 			LoadGenerator: loadGenerator(deployment.Client),
 			Profiles:      []string{profile}, Batches: append([]runner.Batch(nil), item.Batches...),
 			Convergence: item.Convergence, IgnoreEOS: item.IgnoreEOS, Temperature: &temperature,
-			PromptNonce: item.PromptNonce,
+			PromptNonce: item.PromptNonce, ContextPreparation: item.ContextPreparation,
 		})
 	}
 	return workloads
@@ -650,7 +660,7 @@ var ownedServerFlags = map[string][]string{
 		"-m", "--model", "-a", "--alias", "--host", "--port", "-c", "--ctx-size", "-np", "--parallel",
 		"-ngl", "--gpu-layers", "--n-gpu-layers", "-fa", "--flash-attn", "-ctk", "--cache-type-k",
 		"-ctv", "--cache-type-v", "-b", "--batch-size", "-ub", "--ubatch-size", "-t", "--threads",
-		"-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-mu", "--model-url",
+		"-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-mu", "--model-url", "--slot-save-path",
 	},
 	runner.EngineFamilyVLLM: {
 		"--max-model-len", "--max-num-seqs", "--max-num-batched-tokens", "--gpu-memory-utilization",

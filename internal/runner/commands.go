@@ -53,6 +53,7 @@ func llamaCppServeCommand(spec Spec, engine EngineConfig, profile Profile) Comma
 	builder.integer("--batch-size", settings.BatchSize)
 	builder.integer("--ubatch-size", settings.UBatchSize)
 	builder.integer("--threads", settings.Threads)
+	builder.string("--slot-save-path", spec.Runner.SnapshotDir)
 	return CommandSpec{
 		Env:  mergeEnv(spec.Env, engine.Env, profile.Env, false),
 		Args: append(builder, profileExtraArgs(profile)...),
