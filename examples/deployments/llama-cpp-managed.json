@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "name": "example-llama-cpp",
+  "model": "example-model-q4_k_m",
+  "model_revision": "replace-with-immutable-revision",
+  "runtime": {
+    "name": "llama.cpp",
+    "type": "llama-cpp-managed",
+    "owner": "ggml-org",
+    "source": "official release",
+    "version": "replace-with-pinned-build",
+    "command": "llama-server",
+    "host": "127.0.0.1",
+    "port": 8101
+  },
+  "server": {
+    "enable_prefix_caching": false,
+    "llama_cpp": {
+      "model_file": "/path/to/model.gguf",
+      "gpu_layers": 999,
+      "flash_attn": "auto"
+    }
+  },
+  "client": {
+    "backend": "openai-chat",
+    "endpoint": "/v1/chat/completions"
+  },
+  "safety": {
+    "min_mem_available_gib": 8,
+    "poll_interval_millis": 1000,
+    "startup_timeout_sec": 300,
+    "workload_timeout_sec": 1800,
+    "http_timeout_sec": 30
+  }
+}

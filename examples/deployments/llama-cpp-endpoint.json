@@ -1,0 +1,28 @@
+{
+  "version": "1",
+  "name": "example-llama-cpp-endpoint",
+  "model": "example-model-q4_k_m",
+  "model_revision": "replace-with-immutable-revision",
+  "runtime": {
+    "name": "llama.cpp",
+    "type": "llama-cpp-endpoint",
+    "owner": "ggml-org",
+    "source": "official release",
+    "version": "replace-with-pinned-build",
+    "endpoint_base_url": "http://127.0.0.1:8080/v1"
+  },
+  "server": {
+    "enable_prefix_caching": false
+  },
+  "client": {
+    "backend": "openai-chat",
+    "endpoint": "/v1/chat/completions"
+  },
+  "safety": {
+    "min_mem_available_gib": 8,
+    "poll_interval_millis": 1000,
+    "startup_timeout_sec": 120,
+    "workload_timeout_sec": 1800,
+    "http_timeout_sec": 30
+  }
+}

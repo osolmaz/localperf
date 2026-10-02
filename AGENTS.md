@@ -24,7 +24,7 @@ rm -rf /tmp/localperf-onecase-dry /tmp/localperf-onecase-dry.sqlite
 go run ./cmd/localperf bench run \
   --dry-run \
   --suite practical-64k \
-  --deployment examples/deployments/vllm-managed.json \
+  --deployment examples/deployments/llama-cpp-managed.json \
   --case generate-empty \
   --concurrency 1 \
   --run-dir /tmp/localperf-onecase-dry

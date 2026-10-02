@@ -10,20 +10,19 @@
     "source": "official release",
     "version": "replace-with-pinned-version",
     "command": "vllm",
-    "bench_command": "vllm",
-    "managed": true,
     "host": "127.0.0.1",
     "port": 8101
   },
   "server": {
-    "gpu_memory_utilization": 0.5,
-    "kv_cache_dtype": "auto",
-    "attention_backend": "auto",
-    "moe_backend": "auto",
-    "enable_prefix_caching": false
+    "enable_prefix_caching": false,
+    "vllm": {
+      "gpu_memory_utilization": 0.5,
+      "kv_cache_dtype": "auto",
+      "attention_backend": "auto",
+      "moe_backend": "auto"
+    }
   },
   "client": {
-    "load_generator": "vllm_bench",
     "backend": "openai-chat",
     "endpoint": "/v1/chat/completions"
   },

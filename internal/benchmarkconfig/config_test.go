@@ -356,3 +356,20 @@ func vllmDeployment() Deployment {
 		Safety:  Safety{MinMemAvailableGiB: 40},
 	}
 }
+
+func TestExampleDeploymentsCompile(t *testing.T) {
+	paths, err := filepath.Glob("../../examples/deployments/*.json")
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("example deployments = %v, %v", paths, err)
+	}
+	suite, _ := LoadSuite("practical-64k")
+	for _, path := range paths {
+		deployment, err := LoadDeployment(path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if _, err := Compile(suite, deployment, Selection{}); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+	}
+}
