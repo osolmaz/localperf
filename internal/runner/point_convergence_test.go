@@ -234,3 +234,45 @@ func TestArtifactCheckRecomputesPointDecisions(t *testing.T) {
 		}
 	}
 }
+
+// TestResumeRerunningSamplesKeepsTheArtifactValid re-runs one sample of a
+// point that already has a decision. Every snapshot must pass artifact check
+// while the point runs again, and the final artifact must hold the new
+// decision.
+func TestResumeRerunningSamplesKeepsTheArtifactValid(t *testing.T) {
+	server, host, port := steadyOpenAIServer(t)
+	defer server.Close()
+	spec := httpTestSpec(t, host, port, "converge-rerun", 2, 1)
+	spec.Workloads[0].Convergence = wide
+	ApplyDefaults(&spec)
+	options := RunOptions{RunDir: filepath.Join(spec.OutputDir, "converge-rerun"), ArtifactPath: filepath.Join(spec.OutputDir, "converge-rerun.sqlite")}
+	if _, err := Execute(context.Background(), spec, options); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(BuildPlan(spec, options.RunDir)[0].ResultFile); err != nil {
+		t.Fatal(err)
+	}
+	options.Resume = true
+	if _, err := Execute(context.Background(), spec, options); err != nil {
+		t.Fatal(err)
+	}
+	if err := artifact.Check(options.ArtifactPath); err != nil {
+		t.Fatalf("artifact.Check after the re-run = %v", err)
+	}
+	db, err := sql.Open("sqlite", options.ArtifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var failures int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM events WHERE type = 'artifact_snapshot_failed'`).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 0 {
+		t.Fatalf("artifact snapshots failed %d time(s) during the re-run", failures)
+	}
+	events := pointStoppedEvents(t, db)
+	if len(events) != 2 || events[1].Reason != convergence.ReasonConverged || events[1].N != 3 {
+		t.Fatalf("point_stopped = %+v, want the first decision and a new converged one", events)
+	}
+}

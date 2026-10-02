@@ -89,11 +89,16 @@ func readPointDecisions(db *sql.DB) ([]pointDecision, error) {
 
 // checkDecisionSamples compares the recorded values with the completed rows
 // of the point. Order is not compared: a resumed point can fill a missing
-// repeat after later repeats.
+// repeat after later repeats. A point with a sample recorded after its latest
+// decision is being run again, and the next decision covers it.
 func checkDecisionSamples(db *sql.DB, decision pointDecision) error {
 	column, ok := pointMetricColumns[decision.record.Metric]
 	if !ok {
 		return fmt.Errorf("unknown metric %q", decision.record.Metric)
+	}
+	rerunning, err := pointHasLaterSample(db, decision)
+	if err != nil || rerunning {
+		return err
 	}
 	// A completed row without a positive value is not a sample; the runner
 	// stopped the point as failed on it.
@@ -120,6 +125,19 @@ func checkDecisionSamples(db *sql.DB, decision pointDecision) error {
 		return fmt.Errorf("recorded %s values %v, completed measurements %v", decision.record.Metric, decision.record.Values, stored)
 	}
 	return nil
+}
+
+// pointHasLaterSample reports whether a sample of the point started,
+// finished, failed, or was resumed after the decision event.
+func pointHasLaterSample(db *sql.DB, decision pointDecision) (bool, error) {
+	var later int
+	err := db.QueryRow(`SELECT COUNT(*) FROM events AS event
+		JOIN measurements AS measurement ON measurement.id = event.measurement_id
+		WHERE measurement.run_id = ? AND measurement.profile_id = ? AND measurement.workload_id = ?
+		  AND measurement.concurrency = ? AND event.id > ?
+		  AND event.type IN ('workload_start', 'workload_finish', 'workload_failed', 'workload_resumed')`,
+		decision.runID, decision.profileID, decision.workloadID, decision.concurrency, decision.eventID).Scan(&later)
+	return later > 0, err
 }
 
 func sameValues(a, b []float64) bool {
